@@ -166,6 +166,7 @@
   }
   input.numeric { text-align: right; }
   input.numeric-neg { color: #dc2626; }
+  input.date-invalid { border-color: #dc2626 !important; background: #fef2f2 !important; color: #dc2626; }
   .calc, .out, .end-cell, .neg, .pos { text-align: right; }
   .input-cell input  { background: var(--c-input); }
   .roll-cell  input  { background: var(--c-roll); }
@@ -416,10 +417,33 @@ const NUMERIC_EV_KEYS = ['shares', 'price', 'tax', 'amount'];
 
 function parseTwDate(str) {
   if (!str) return null;
-  const m = String(str).match(/^(\d+)[.\-\/](\d+)[.\-\/](\d+)$/);
+  const s = String(str).trim();
+  if (!s) return null;
+  // 接受多種格式：108.07.01 / 108-7-1 / 108/7/1 / 108年7月1日 / 2019/7/1
+  const m = s.match(/^(\d+)\s*[.\-\/年]\s*(\d+)\s*[.\-\/月]\s*(\d+)\s*日?$/);
   if (!m) return null;
-  const y = parseInt(m[1]) + 1911;
-  return new Date(y, parseInt(m[2]) - 1, parseInt(m[3]));
+  let y = parseInt(m[1]);
+  const month = parseInt(m[2]);
+  const day = parseInt(m[3]);
+  if (!isFinite(y) || !isFinite(month) || !isFinite(day)) return null;
+  // 1911 年（含）以上視為西元，否則視為民國
+  if (y < 1911) y += 1911;
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const d = new Date(y, month - 1, day);
+  if (isNaN(d.getTime())) return null;
+  // 防止 2/30 自動變 3/2 之類的溢位
+  if (d.getMonth() !== month - 1 || d.getDate() !== day) return null;
+  return d;
+}
+
+// 標準化為「民國.月.日」格式（補零）
+function normalizeTwDate(str) {
+  const d = parseTwDate(str);
+  if (!d) return str;
+  const tw = d.getFullYear() - 1911;
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${tw}.${mm}.${dd}`;
 }
 function daysBetween(d1, d2) {
   if (!d1 || !d2) return 0;
@@ -924,7 +948,7 @@ function renderEventTable(co) {
   const rows = (co.events || []).map((ev, idx) => {
     const subtotal = (ev.shares || 0) * (ev.price || 0);
     return `<tr data-evrow="${idx}">
-      <td><input type="text" data-ev="${idx}" data-key="date" value="${ev.date || ''}" placeholder="${co.year}.07.01" style="text-align:left"></td>
+      <td><input type="text" data-ev="${idx}" data-key="date" value="${ev.date || ''}" placeholder="${co.year}.07.01" style="text-align:left" class="${ev.date && !parseTwDate(ev.date) ? 'date-invalid' : ''}" title="可輸入 108.07.01、108-7-1、108/7/1、108年7月1日、2019/7/1（自動偵測民國/西元）"></td>
       <td><select data-ev="${idx}" data-key="type">${types.map(t => `<option ${t===ev.type?'selected':''}>${t}</option>`).join('')}</select></td>
       <td>${numInput(ev.shares || 0, `data-ev="${idx}" data-key="shares"`)}</td>
       <td>${numInput(ev.price || 0, `data-ev="${idx}" data-key="price"`)}</td>
@@ -939,6 +963,7 @@ function renderEventTable(co) {
   <div class="sec" id="in_events">
     <h2 class="sec-title">三、本年度股權變動 / 股利事件</h2>
     <div class="note">
+      <strong>日期格式</strong>：可輸入 <code>113.07.01</code> / <code>113-7-1</code> / <code>113/7/1</code> / <code>113年7月1日</code> / <code>2024/7/1</code>（自動偵測民國／西元，blur 後自動補零標準化）；無法解析時會紅框警示，該事件將不納入計算。<br><br>
       <strong>類型說明：</strong><br>
       <strong>出售</strong>：股數＝出售股數（正數）；單價＝每股賣價；證交稅／手續費另計<br>
       <strong>現金增資認購</strong>：股數＝認購股數；單價＝認購價；手續費（如有）填稅費欄<br>
@@ -1448,6 +1473,10 @@ function bindMainEvents() {
       if (NUMERIC_EV_KEYS.includes(key)) {
         e.target.classList.toggle('numeric-neg', v < 0);
       }
+      if (key === 'date') {
+        const valid = !v || parseTwDate(v);
+        e.target.classList.toggle('date-invalid', !valid);
+      }
       if (key === 'type') {
         renderMain();
       } else {
@@ -1466,8 +1495,20 @@ function bindMainEvents() {
       if (!yr) return;
       const idx = +e.target.dataset.ev;
       const key = e.target.dataset.key;
-      if (yr.events[idx] && NUMERIC_EV_KEYS.includes(key)) {
+      if (!yr.events[idx]) return;
+      if (NUMERIC_EV_KEYS.includes(key)) {
         e.target.value = fmtInput(yr.events[idx][key]);
+      } else if (key === 'date') {
+        // 自動標準化日期格式為「民國.月.日」
+        const raw = yr.events[idx].date;
+        const normalized = normalizeTwDate(raw);
+        if (normalized !== raw && parseTwDate(raw)) {
+          yr.events[idx].date = normalized;
+          e.target.value = normalized;
+          e.target.classList.remove('date-invalid');
+          save();
+          recomputeOutputs();
+        }
       }
     });
   });
