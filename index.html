@@ -1,0 +1,1667 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<title>權益法投資計算系統</title>
+<style>
+  :root {
+    --c-input: #dbeafe;
+    --c-roll:  #e5e7eb;
+    --c-end:   #fef3c7;
+    --c-out:   #d1fae5;
+    --c-check: #fef2f2;
+    --c-border:#cbd5e1;
+    --c-primary:#2563eb;
+    --c-text:#1e293b;
+    --c-muted:#64748b;
+    --c-card:#fff;
+    --c-bg:#f1f5f9;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: "Microsoft JhengHei", "PingFang TC", "Noto Sans TC", sans-serif;
+    margin: 0; background: var(--c-bg); color: var(--c-text); font-size: 14px;
+  }
+  header {
+    background: #0f172a; color: #fff; padding: 12px 24px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  header h1 { font-size: 18px; margin: 0; font-weight: 500; }
+  header .actions button { background: #1e40af; color: #fff; border: none; padding: 6px 12px; border-radius: 3px; cursor: pointer; font-size: 13px; margin-left: 6px; }
+  header .actions button:hover { background: #2563eb; }
+
+  .layout { display: grid; grid-template-columns: 240px 1fr; min-height: calc(100vh - 50px); }
+  aside.sidebar {
+    background: #1e293b; color: #cbd5e1; padding: 16px 12px;
+  }
+  aside h3 { font-size: 13px; color: #94a3b8; margin: 0 0 8px; font-weight: 500; letter-spacing: 1px; }
+  aside .investor-section {
+    padding-bottom: 14px;
+    margin-bottom: 14px;
+    border-bottom: 1px solid #334155;
+  }
+  aside .investor-section input {
+    width: 100%;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.15);
+    color: #fff;
+    padding: 7px 10px;
+    border-radius: 3px;
+    font-size: 14px;
+    font-weight: 600;
+  }
+  aside .investor-section input::placeholder { color: rgba(255,255,255,0.4); font-weight: normal; }
+  aside .investor-section input:focus {
+    outline: none;
+    border-color: #3b82f6;
+    background: rgba(255,255,255,0.12);
+  }
+  aside .investee-wrap {
+    margin-left: 6px;
+    padding-left: 10px;
+    border-left: 2px solid #334155;
+  }
+  .company-list { list-style: none; padding: 0; margin: 0 0 12px; }
+  .company-list li {
+    padding: 8px 10px; cursor: pointer; border-radius: 3px;
+    margin-bottom: 2px; font-size: 13px; display: flex; justify-content: space-between; align-items: center;
+  }
+  .company-list li:hover { background: #334155; color: #fff; }
+  .company-list li.active { background: #2563eb; color: #fff; }
+  .company-list li.empty { color: #64748b; font-style: italic; cursor: default; padding: 12px; }
+  .company-list li .del-btn {
+    background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 14px;
+    padding: 0 4px; visibility: hidden;
+  }
+  .company-list li:hover .del-btn { visibility: visible; }
+  .company-list li.active .del-btn { color: #fff; visibility: visible; }
+  .add-company-btn {
+    width: 100%; padding: 8px; background: transparent; color: #94a3b8;
+    border: 1px dashed #475569; border-radius: 3px; cursor: pointer; font-size: 13px;
+  }
+  .add-company-btn:hover { background: #334155; color: #fff; }
+
+  main { padding: 20px 28px; overflow-y: auto; max-width: 1280px; }
+  .empty-state {
+    text-align: center; padding: 80px 20px; color: var(--c-muted);
+  }
+  .empty-state h2 { color: var(--c-text); }
+  .empty-state button {
+    background: var(--c-primary); color: #fff; border: none; padding: 10px 24px;
+    border-radius: 4px; cursor: pointer; font-size: 14px; margin-top: 12px;
+  }
+
+  /* 年度 tab + 視圖切換 */
+  .year-tabs-bar {
+    display: flex; align-items: flex-end; justify-content: space-between;
+    border-bottom: 1px solid var(--c-border); margin-bottom: 14px; gap: 12px;
+  }
+  .year-tabs { display: flex; gap: 2px; align-items: flex-end; }
+  .year-tab {
+    padding: 7px 14px; cursor: pointer; font-size: 13px;
+    border: 1px solid transparent; border-bottom: none;
+    border-radius: 4px 4px 0 0; background: #e2e8f0; color: #475569;
+    position: relative;
+  }
+  .year-tab:hover:not(.active) { background: #cbd5e1; }
+  .year-tab.active {
+    background: var(--c-card); color: var(--c-text); font-weight: 600;
+    border-color: var(--c-border); margin-bottom: -1px;
+  }
+  .year-tab .del-year {
+    margin-left: 6px; color: #94a3b8; font-weight: normal; opacity: 0;
+    transition: opacity 0.15s;
+  }
+  .year-tab:hover .del-year { opacity: 1; }
+  .year-tab.add { background: transparent; border: 1px dashed var(--c-border); color: var(--c-primary); }
+  .year-tab.add:hover { background: #eff6ff; }
+
+  .view-toggle { display: flex; gap: 4px; padding-bottom: 4px; }
+  .view-toggle button {
+    padding: 6px 12px; font-size: 12px; cursor: pointer;
+    border: 1px solid var(--c-border); border-radius: 3px;
+    background: #fff; color: #475569;
+  }
+  .view-toggle button.active { background: var(--c-primary); color: #fff; border-color: var(--c-primary); }
+
+  /* 歷年表格 */
+  .history-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .history-table th, .history-table td {
+    border: 1px solid var(--c-border); padding: 6px 8px;
+    white-space: nowrap;
+  }
+  .history-table thead { background: #1e293b; color: #fff; }
+  .history-table thead th { font-weight: 600; }
+  .history-table tbody tr:nth-child(even) { background: #fafafa; }
+  .history-table tbody tr.tot { background: #fef3c7; font-weight: 600; }
+  .history-table .year-col { font-weight: 600; background: #f1f5f9; cursor: pointer; }
+  .history-table .year-col:hover { background: #dbeafe; color: var(--c-primary); }
+
+  h2.sec-title {
+    font-size: 16px; margin: 0 0 12px;
+    border-left: 4px solid var(--c-primary); padding-left: 10px;
+  }
+  .sec {
+    background: var(--c-card); padding: 16px 20px; margin-bottom: 14px;
+    border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; margin-bottom: 12px; color: var(--c-muted); }
+  .legend .swatch {
+    display: inline-block; width: 13px; height: 13px; vertical-align: middle;
+    margin-right: 4px; border: 1px solid #94a3b8; border-radius: 2px;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: 220px 200px 1fr;
+    gap: 6px 14px; align-items: center;
+  }
+  .grid .label { font-size: 13px; }
+  .grid .hint { font-size: 12px; color: var(--c-muted); }
+
+  input[type="number"], input[type="text"], select {
+    border: 1px solid var(--c-border); padding: 5px 7px; font-size: 13px;
+    border-radius: 3px; width: 100%;
+    font-variant-numeric: tabular-nums; background: #fff;
+  }
+  input.numeric { text-align: right; }
+  input.numeric-neg { color: #dc2626; }
+  .calc, .out, .end-cell, .neg, .pos { text-align: right; }
+  .input-cell input  { background: var(--c-input); }
+  .roll-cell  input  { background: var(--c-roll); }
+  .calc {
+    background: #fff; padding: 5px 8px; border: 1px solid #e2e8f0;
+    border-radius: 3px; font-variant-numeric: tabular-nums;
+  }
+  .end-cell { background: var(--c-end); padding: 5px 8px; border: 1px solid #fde68a; border-radius: 3px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .out      { background: var(--c-out); padding: 5px 8px; border: 1px solid #86efac; border-radius: 3px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .neg { color: #dc2626; }
+
+  table.events, table.segs, table.entries { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 13px; }
+  table th, table td { border: 1px solid var(--c-border); padding: 4px 6px; }
+  table thead { background: #f1f5f9; }
+  table th { font-weight: 600; }
+  table.events td input, table.events td select { width: 100%; }
+  table tbody tr:nth-child(even) { background: #fafafa; }
+  table .num { text-align: right; font-variant-numeric: tabular-nums; }
+
+  button.primary { padding: 6px 14px; font-size: 13px; cursor: pointer; background: var(--c-primary); color: #fff; border: none; border-radius: 3px; }
+  button.ghost   { padding: 6px 14px; font-size: 13px; cursor: pointer; background: #fff; color: #475569; border: 1px solid var(--c-border); border-radius: 3px; }
+  button.del     { background: #ef4444; color: #fff; border: none; padding: 2px 8px; border-radius: 3px; cursor: pointer; }
+
+  .note {
+    font-size: 12px; color: #78350f; background: #fefce8;
+    padding: 8px 12px; border-left: 3px solid #ca8a04;
+    margin: 8px 0; line-height: 1.6;
+  }
+  .checkrow {
+    display: flex; gap: 10px; align-items: flex-start; padding: 6px 0;
+    font-size: 13px; line-height: 1.5;
+  }
+  .led {
+    width: 14px; height: 14px; border-radius: 50%;
+    flex-shrink: 0; margin-top: 4px;
+  }
+  .led.green { background: #16a34a; box-shadow: 0 0 6px #16a34a55; }
+  .led.red   { background: #dc2626; box-shadow: 0 0 6px #dc262655; }
+
+  .entry {
+    background: #fafafa; border: 1px solid #e2e8f0; border-radius: 4px;
+    padding: 8px 12px; margin-bottom: 8px; font-size: 13px;
+  }
+  .entry .ehead { font-weight: 600; color: #334155; margin-bottom: 4px; font-size: 12px; }
+  .entry table { width: 100%; }
+  .entry table td { border: none; padding: 2px 4px; }
+  .entry table td.acct { padding-left: 12px; }
+  .entry table td.acct.cr { padding-left: 36px; }
+  .entry table td.amt { text-align: right; font-variant-numeric: tabular-nums; width: 140px; }
+
+  .small { font-size: 12px; color: var(--c-muted); }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px; }
+  .pill.b { background: #dbeafe; color: #1e40af; }
+  .pill.g { background: #d1fae5; color: #065f46; }
+  .pill.y { background: #fef3c7; color: #78350f; }
+  .pill.r { background: #fee2e2; color: #991b1b; }
+
+  .page-title {
+    font-size: 16px; padding: 6px 0 10px; margin-bottom: 12px;
+    border-bottom: 2px solid var(--c-primary);
+    display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+  }
+  .page-title .muted { color: var(--c-muted); font-size: 13px; }
+  .page-title .name { font-weight: 600; font-size: 16px; }
+  .page-title .sep { color: var(--c-muted); margin: 0 6px; }
+
+  @media print {
+    aside, header, .year-tabs-bar { display: none; }
+    .layout { display: block; }
+    main { padding: 0; max-width: 100%; }
+    .sec { box-shadow: none; border: 1px solid #ccc; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>權益法投資計算系統</h1>
+  <div class="actions">
+    <button id="export_btn">匯出 JSON</button>
+    <button id="import_btn">匯入 JSON</button>
+    <input type="file" id="import_file" style="display:none" accept=".json">
+    <button onclick="window.print()">列印</button>
+  </div>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="investor-section">
+      <h3>投資公司</h3>
+      <input type="text" id="investor_name_input" placeholder="輸入投資公司名稱">
+    </div>
+    <h3>被投資公司</h3>
+    <div class="investee-wrap">
+      <ul class="company-list" id="company_list"></ul>
+      <button class="add-company-btn" id="add_company">+ 新增被投資公司</button>
+    </div>
+  </aside>
+  <main id="main_content"></main>
+</div>
+
+<script>
+// ============================================================
+// 資料模型 v3：投資公司 → 被投資公司[] → 年度[]
+// ============================================================
+const STATE_KEY = 'equity-method-investees-v3';
+const OLD_KEY_V2 = 'equity-method-investees-v2';
+
+function defaultState() {
+  return {
+    investor_name: '',
+    investees: [],
+    current_investee_id: null,
+    current_year: null,
+    view_mode: 'detail', // 'detail' | 'history'
+  };
+}
+
+function newYear(year) {
+  return {
+    year,
+    init_shares: 0, init_total: 0, init_bv: 0, init_cost: 0, init_oci: 0,
+    sub_ni: 0, sub_oci: 0, sub_eq_end: 0, sub_shares_end: 0,
+    events: [],
+  };
+}
+
+function newInvestee(name = '新被投資公司', startYear = 110) {
+  return {
+    id: 'inv_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+    name,
+    years: [newYear(startYear)],
+  };
+}
+
+function migrateV2(s) {
+  const out = defaultState();
+  out.investor_name = s.investor_name || '';
+  if (!s.companies) return out;
+
+  const byName = {};
+  for (const co of s.companies) {
+    const k = co.name || '未命名';
+    if (!byName[k]) {
+      byName[k] = {
+        id: 'inv_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+        name: k,
+        years: [],
+      };
+    }
+    byName[k].years.push({
+      year: co.year,
+      init_shares: co.init_shares, init_total: co.init_total,
+      init_bv: co.init_bv, init_cost: co.init_cost, init_oci: co.init_oci,
+      sub_ni: co.sub_ni, sub_oci: co.sub_oci,
+      sub_eq_end: co.sub_eq_end, sub_shares_end: co.sub_shares_end,
+      events: co.events || [],
+    });
+  }
+  out.investees = Object.values(byName);
+  out.investees.forEach(inv => inv.years.sort((a, b) => a.year - b.year));
+  out.current_investee_id = out.investees[0]?.id || null;
+  out.current_year = out.investees[0]?.years[0]?.year || null;
+  return out;
+}
+
+function loadState() {
+  const raw = localStorage.getItem(STATE_KEY);
+  if (raw) {
+    try {
+      const s = JSON.parse(raw);
+      if (s.investees) {
+        if (!s.view_mode) s.view_mode = 'detail';
+        return s;
+      }
+    } catch (e) {}
+  }
+  // 從 v2 遷移
+  const oldRaw = localStorage.getItem(OLD_KEY_V2);
+  if (oldRaw) {
+    try {
+      const migrated = migrateV2(JSON.parse(oldRaw));
+      localStorage.setItem(STATE_KEY, JSON.stringify(migrated));
+      return migrated;
+    } catch (e) {}
+  }
+  return defaultState();
+}
+
+let state = loadState();
+
+function save() {
+  localStorage.setItem(STATE_KEY, JSON.stringify(state));
+}
+
+function curInvestee() {
+  if (!state.current_investee_id) return null;
+  return state.investees.find(i => i.id === state.current_investee_id) || null;
+}
+
+function curYear() {
+  const inv = curInvestee();
+  if (!inv || !inv.years || inv.years.length === 0) return null;
+  return inv.years.find(y => y.year === state.current_year) || inv.years[0] || null;
+}
+
+// 給 compute() 用的合併物件（含 name）
+function curCompany() {
+  const inv = curInvestee();
+  const yr = curYear();
+  if (!inv || !yr) return null;
+  return { ...yr, name: inv.name };
+}
+
+// ============================================================
+// 工具函數
+// ============================================================
+const fmt = n => {
+  if (n === null || n === undefined || !isFinite(n)) return '—';
+  const r = Math.round(n);
+  if (r < 0) return '<span class="neg">' + r.toLocaleString('zh-Hant') + '</span>';
+  return r.toLocaleString('zh-Hant');
+};
+const fmtSigned = n => {
+  if (!isFinite(n)) return '—';
+  const r = Math.round(n);
+  if (r < 0) return '<span class="neg">' + r.toLocaleString('zh-Hant') + '</span>';
+  return r.toLocaleString('zh-Hant');
+};
+const fmtPct = (p, d=4) => isFinite(p) ? (p * 100).toFixed(d) + '%' : '—';
+
+const fmtInput = v => {
+  if (v === null || v === undefined || v === '') return '';
+  const n = Number(v);
+  if (!isFinite(n)) return '';
+  return n.toLocaleString('zh-Hant');
+};
+function parseNum(s) {
+  if (s === null || s === undefined || s === '') return 0;
+  const cleaned = String(s).replace(/[^\d.\-]/g, '');
+  if (cleaned === '' || cleaned === '-' || cleaned === '.' || cleaned === '-.') return 0;
+  const n = parseFloat(cleaned);
+  return isFinite(n) ? n : 0;
+}
+
+const NUMERIC_CO_KEYS = ['init_shares', 'init_total', 'init_bv', 'init_cost', 'init_oci', 'sub_ni', 'sub_oci', 'sub_eq_end', 'sub_shares_end'];
+const NUMERIC_EV_KEYS = ['shares', 'price', 'tax', 'amount'];
+
+function parseTwDate(str) {
+  if (!str) return null;
+  const m = String(str).match(/^(\d+)[.\-\/](\d+)[.\-\/](\d+)$/);
+  if (!m) return null;
+  const y = parseInt(m[1]) + 1911;
+  return new Date(y, parseInt(m[2]) - 1, parseInt(m[3]));
+}
+function daysBetween(d1, d2) {
+  if (!d1 || !d2) return 0;
+  return Math.round((d2 - d1) / (1000 * 60 * 60 * 24));
+}
+function isLeapYear(y) {
+  return (y % 4 === 0 && y % 100 !== 0) || (y % 400 === 0);
+}
+function totalDaysInYear(twYear) {
+  return isLeapYear(twYear + 1911) ? 366 : 365;
+}
+
+// ============================================================
+// 計算引擎（C1 完整版時間段加權方法）
+// ============================================================
+function compute(co) {
+  if (!co) return null;
+  const totDays = totalDaysInYear(co.year);
+  const yearStart = parseTwDate(`${co.year}.01.01`);
+  const yearLastDay = parseTwDate(`${co.year}.12.31`);
+  const yearEnd = new Date(yearLastDay.getTime() + 86400000);
+
+  const events = [...(co.events || [])]
+    .map((e, i) => ({...e, _idx: i}))
+    .filter(e => parseTwDate(e.date))
+    .sort((a, b) => parseTwDate(a.date) - parseTwDate(b.date));
+
+  const validEvents = events.filter(e => {
+    const d = parseTwDate(e.date);
+    return d >= yearStart && d <= yearLastDay;
+  });
+
+  const cutDates = [yearStart, ...validEvents.map(e => parseTwDate(e.date)), yearEnd];
+
+  let cur = {
+    shares: co.init_shares, total: co.init_total,
+    bv: co.init_bv, cost: co.init_cost, oci: co.init_oci,
+  };
+
+  const segments = [];
+  for (let i = 0; i < cutDates.length - 1; i++) {
+    const segStart = cutDates[i];
+    const segEnd = cutDates[i + 1];
+    const days = daysBetween(segStart, segEnd);
+    const event = i < cutDates.length - 2 ? validEvents[i] : null;
+
+    const holdingPct = cur.total > 0 ? cur.shares / cur.total : 0;
+    const segNIPortion  = co.sub_ni  * days / totDays;
+    const segOCIPortion = co.sub_oci * days / totDays;
+    const recogNI  = Math.round(segNIPortion  * holdingPct);
+    const recogOCI = Math.round(segOCIPortion * holdingPct);
+
+    const bvStart = cur.bv, costStart = cur.cost, ociStart = cur.oci;
+    cur.bv  += recogNI + recogOCI;
+    cur.oci += recogOCI;
+
+    const seg = {
+      idx: i, startDate: segStart, endDate: segEnd, days, holdingPct,
+      shares: cur.shares, total: cur.total,
+      bvStart, costStart, ociStart,
+      segNIPortion, segOCIPortion, recogNI, recogOCI,
+      bvAfterAuth: cur.bv, ociAfterAuth: cur.oci,
+      event: null, evImpact: null,
+    };
+    if (event) {
+      seg.event = event;
+      seg.evImpact = applyEvent(event, cur);
+    }
+    segments.push(seg);
+  }
+
+  const totalRecogNI  = segments.reduce((s, x) => s + x.recogNI, 0);
+  const totalRecogOCI = segments.reduce((s, x) => s + x.recogOCI, 0);
+
+  const sales = segments.filter(s => s.event && (s.event.type === '出售' || s.event.type === '股份讓與'));
+  const buys  = segments.filter(s => s.event && (s.event.type === '現金增資認購' || s.event.type === '受贈' || s.event.type === '股份受讓'));
+  const reduces = segments.filter(s => s.event && s.event.type === '減資退現');
+  const cashDivs = segments.filter(s => s.event && s.event.type === '收現金股利');
+  const stockDivs = segments.filter(s => s.event && s.event.type === '盈餘轉增資');
+
+  const sumImpact = (arr, key) => arr.reduce((s, x) => s + (x.evImpact[key] || 0), 0);
+  const totalSaleProceeds = sumImpact(sales, 'proceeds');
+  const totalSaleTax      = sumImpact(sales, 'tax');
+  const totalBVRemoved    = sumImpact(sales, 'bvRemoved');
+  const totalCostRemoved  = sumImpact(sales, 'costRemoved');
+  const totalOCIRemoved   = sumImpact(sales, 'ociRemoved');
+  const totalGainFin      = sumImpact(sales, 'gainFin');
+  const totalGainTax      = sumImpact(sales, 'gainTax');
+
+  const totalBuyAmt   = sumImpact(buys, 'amount');
+  const totalReduceCash = sumImpact(reduces, 'cashBack');
+  const totalReduceBV   = sumImpact(reduces, 'bvReduced');
+  const totalReduceCost = sumImpact(reduces, 'costReduced');
+
+  const totalCashDiv = sumImpact(cashDivs, 'divAmt');
+  const totalStockDivShares = sumImpact(stockDivs, 'stockShares');
+  const totalStockDivAmount = sumImpact(stockDivs, 'stockDivAmount');
+
+  const weightedPct = segments.reduce((s, seg) => s + seg.holdingPct * seg.days, 0) / totDays;
+  const endShares = cur.shares, endBV = cur.bv, endCost = cur.cost, endOCI = cur.oci;
+  const endPct = co.sub_shares_end > 0 ? endShares / co.sub_shares_end : 0;
+  const expectedEndBV = co.sub_eq_end * endPct;
+  const bvDiff = endBV - expectedEndBV;
+  const bvTol = Math.max(Math.abs(expectedEndBV) * 0.01, 1000);
+
+  return {
+    co, totDays, weightedPct, segments,
+    totalRecogNI, totalRecogOCI,
+    sales, buys, reduces, cashDivs, stockDivs,
+    totalSaleProceeds, totalSaleTax, totalBVRemoved, totalCostRemoved, totalOCIRemoved,
+    totalGainFin, totalGainTax,
+    totalBuyAmt, totalReduceCash, totalReduceBV, totalReduceCost,
+    totalCashDiv, totalStockDivShares, totalStockDivAmount,
+    endShares, endBV, endCost, endOCI, endPct,
+    expectedEndBV, bvDiff, bvTol,
+  };
+}
+
+function applyEvent(ev, st) {
+  const sh    = Math.abs(parseFloat(ev.shares) || 0);
+  const price = parseFloat(ev.price) || 0;
+  const tax   = parseFloat(ev.tax) || 0;
+  const amt   = parseFloat(ev.amount) || 0;
+  const impact = {};
+
+  switch (ev.type) {
+    case '出售':
+    case '股份讓與': {
+      const proceeds = sh * price;
+      const ratio = st.shares > 0 ? sh / st.shares : 0;
+      const bvRemoved   = Math.round(st.bv   * ratio);
+      const costRemoved = Math.round(st.cost * ratio);
+      const ociRemoved  = Math.round(st.oci  * ratio);
+      const gainFin = proceeds - tax - bvRemoved + ociRemoved;
+      const gainTax = proceeds - tax - costRemoved;
+      st.shares -= sh; st.bv -= bvRemoved; st.cost -= costRemoved; st.oci -= ociRemoved;
+      Object.assign(impact, { saleShares: sh, proceeds, tax, ratio, bvRemoved, costRemoved, ociRemoved, gainFin, gainTax });
+      break;
+    }
+    case '現金增資認購':
+    case '股份受讓': {
+      const amount = sh * price;
+      st.shares += sh; st.bv += amount - tax; st.cost += amount;
+      Object.assign(impact, { buyShares: sh, amount, tax });
+      break;
+    }
+    case '受贈': {
+      const amount = sh * price;
+      st.shares += sh; st.bv += amount; st.cost += amount;
+      Object.assign(impact, { buyShares: sh, amount });
+      break;
+    }
+    case '減資退現': {
+      const cashBack = sh * price;
+      const ratio = st.shares > 0 ? sh / st.shares : 0;
+      const bvReduced   = Math.round(st.bv   * ratio);
+      const costReduced = Math.round(st.cost * ratio);
+      const ociReduced  = Math.round(st.oci  * ratio);
+      st.shares -= sh; st.bv -= bvReduced; st.cost -= costReduced; st.oci -= ociReduced;
+      Object.assign(impact, { reduceShares: sh, cashBack, ratio, bvReduced, costReduced, ociReduced });
+      break;
+    }
+    case '收現金股利': {
+      const divAmt = amt > 0 ? amt : (sh * price);
+      st.bv -= divAmt;
+      Object.assign(impact, { divAmt });
+      break;
+    }
+    case '盈餘轉增資': {
+      st.shares += sh; st.cost += sh * 10;
+      st.total  += parseFloat(ev.subShareDelta) || 0;
+      Object.assign(impact, { stockShares: sh, stockDivAmount: sh * 10, subShareDelta: parseFloat(ev.subShareDelta) || 0 });
+      break;
+    }
+  }
+  return impact;
+}
+
+// ============================================================
+// 渲染 — Sidebar
+// ============================================================
+function renderInvesteeList() {
+  const ul = document.getElementById('company_list');
+  if (state.investees.length === 0) {
+    ul.innerHTML = '<li class="empty">尚無資料</li>';
+    return;
+  }
+  ul.innerHTML = state.investees.map(inv => {
+    const active = inv.id === state.current_investee_id ? 'active' : '';
+    return `<li class="${active}" data-id="${inv.id}">
+      <span>${inv.name || '（未命名）'}</span>
+      <button class="del-btn" data-del="${inv.id}" title="刪除">×</button>
+    </li>`;
+  }).join('');
+  ul.querySelectorAll('li[data-id]').forEach(li => {
+    li.addEventListener('click', e => {
+      if (e.target.dataset.del) return;
+      state.current_investee_id = li.dataset.id;
+      const inv = curInvestee();
+      state.current_year = inv?.years[0]?.year || null;
+      save();
+      renderAll();
+    });
+  });
+  ul.querySelectorAll('button[data-del]').forEach(b => {
+    b.addEventListener('click', e => {
+      e.stopPropagation();
+      if (!confirm('確定刪除此被投資公司及所有年度資料？')) return;
+      state.investees = state.investees.filter(i => i.id !== b.dataset.del);
+      if (state.current_investee_id === b.dataset.del) {
+        state.current_investee_id = state.investees[0]?.id || null;
+        state.current_year = curInvestee()?.years[0]?.year || null;
+      }
+      save();
+      renderAll();
+    });
+  });
+}
+
+// ============================================================
+// 渲染 — Main
+// ============================================================
+function renderMain() {
+  const main = document.getElementById('main_content');
+  const inv = curInvestee();
+
+  if (!inv) {
+    main.innerHTML = `<div class="empty-state">
+      <h2>尚未建立任何被投資公司</h2>
+      <p>點選左側「+ 新增被投資公司」開始</p>
+      <button onclick="addInvestee()">+ 新增</button>
+    </div>`;
+    return;
+  }
+
+  const tabs = renderYearTabs(inv);
+
+  if (state.view_mode === 'history') {
+    main.innerHTML = tabs + renderHistoryView(inv);
+    bindTabsEvents();
+    return;
+  }
+
+  const yr = curYear();
+  if (!yr) {
+    main.innerHTML = tabs + `<div class="empty-state"><p>請點選「+ 新增年度」建立年度資料</p></div>`;
+    bindTabsEvents();
+    return;
+  }
+
+  const co = { ...yr, name: inv.name };
+  const r = compute(co);
+
+  main.innerHTML = tabs + `
+    <div class="page-title">
+      <span class="muted">投資公司</span><span class="name" id="pt_investor">${state.investor_name || '（未設定）'}</span>
+      <span class="sep">▸</span>
+      <span class="muted">被投資公司</span><span class="name" id="pt_investee">${inv.name || '（未命名）'}</span>
+      <span class="sep">·</span>
+      <span class="muted">${co.year} 年度</span>
+    </div>
+    <div class="legend">
+      <span><span class="swatch" style="background:var(--c-input)"></span>藍：本年度輸入</span>
+      <span><span class="swatch" style="background:var(--c-roll)"></span>灰：上年度承轉</span>
+      <span><span class="swatch" style="background:#fff"></span>白：自動計算</span>
+      <span><span class="swatch" style="background:var(--c-end)"></span>黃：期末結轉</span>
+      <span><span class="swatch" style="background:var(--c-out)"></span>綠：報稅輸出</span>
+    </div>
+    ${renderBasicInfo(co)}
+    ${renderSubInfo(co)}
+    ${renderEventTable(co)}
+    ${renderSegments(r)}
+    ${renderSummary(r)}
+    ${renderJournalEntries(r)}
+    ${renderTaxOutput(r)}
+    ${renderEndCarry(r)}
+    ${renderChecks(r)}
+  `;
+
+  bindTabsEvents();
+  bindMainEvents();
+}
+
+function renderYearTabs(inv) {
+  const sortedYears = [...inv.years].sort((a, b) => a.year - b.year);
+  const tabs = sortedYears.map(y => {
+    const active = (y.year === state.current_year && state.view_mode === 'detail') ? 'active' : '';
+    return `<div class="year-tab ${active}" data-year="${y.year}">${y.year} 年度<span class="del-year" data-del-year="${y.year}">×</span></div>`;
+  }).join('');
+  return `
+    <div class="year-tabs-bar">
+      <div class="year-tabs">
+        ${tabs}
+        <div class="year-tab add" id="add_year_btn">+ 新增年度</div>
+      </div>
+      <div class="view-toggle">
+        <button class="${state.view_mode==='detail'?'active':''}" data-vm="detail">本年度詳情</button>
+        <button class="${state.view_mode==='history'?'active':''}" data-vm="history">歷年持股變動表</button>
+      </div>
+    </div>`;
+}
+
+function bindTabsEvents() {
+  document.querySelectorAll('.year-tab[data-year]').forEach(t => {
+    t.addEventListener('click', e => {
+      if (e.target.dataset.delYear) return;
+      state.current_year = parseInt(t.dataset.year);
+      state.view_mode = 'detail';
+      save();
+      renderMain();
+    });
+  });
+  document.querySelectorAll('[data-del-year]').forEach(b => {
+    b.addEventListener('click', e => {
+      e.stopPropagation();
+      const yr = parseInt(b.dataset.delYear);
+      if (!confirm(`確定刪除 ${yr} 年度的資料？`)) return;
+      const inv = curInvestee();
+      inv.years = inv.years.filter(y => y.year !== yr);
+      if (state.current_year === yr) {
+        state.current_year = inv.years[0]?.year || null;
+      }
+      save();
+      renderMain();
+    });
+  });
+  document.getElementById('add_year_btn')?.addEventListener('click', addYear);
+  document.querySelectorAll('.view-toggle button').forEach(b => {
+    b.addEventListener('click', () => {
+      state.view_mode = b.dataset.vm;
+      save();
+      renderMain();
+    });
+  });
+}
+
+// ============================================================
+// 歷年持股變動表
+// ============================================================
+function renderHistoryView(inv) {
+  if (!inv.years || inv.years.length === 0) {
+    return `<div class="sec"><div class="small">尚無年度資料</div></div>`;
+  }
+  const sortedYears = [...inv.years].sort((a, b) => a.year - b.year);
+
+  const rows = sortedYears.map(yr => {
+    const co = { ...yr, name: inv.name };
+    const r = compute(co);
+    const eventDesc = summarizeEvents(yr.events);
+    const initPct = yr.init_total > 0 ? yr.init_shares / yr.init_total : 0;
+    return `<tr>
+      <td class="year-col" data-goto="${yr.year}">${yr.year}</td>
+      <td class="num">${fmt(yr.init_shares)}</td>
+      <td class="num">${fmtPct(initPct, 2)}</td>
+      <td class="num">${fmtSigned(yr.init_bv)}</td>
+      <td class="num">${fmtSigned(yr.init_cost)}</td>
+      <td>${eventDesc || '<span class="small">—</span>'}</td>
+      <td class="num">${fmtSigned(r.totalRecogNI)}</td>
+      <td class="num">${fmtSigned(r.totalRecogOCI)}</td>
+      <td class="num">${fmt(r.totalCashDiv)}</td>
+      <td class="num">${fmt(r.totalStockDivShares)}</td>
+      <td class="num">${fmtSigned(r.totalGainTax)}</td>
+      <td class="num">${fmt(r.endShares)}</td>
+      <td class="num">${fmtPct(r.endPct, 2)}</td>
+      <td class="num">${fmtSigned(r.endBV)}</td>
+      <td class="num">${fmtSigned(r.endCost)}</td>
+      <td class="num">${fmtSigned(r.endOCI)}</td>
+    </tr>`;
+  }).join('');
+
+  return `
+    <div class="page-title">
+      <span class="muted">投資公司</span><span class="name">${state.investor_name || '（未設定）'}</span>
+      <span class="sep">▸</span>
+      <span class="muted">被投資公司</span><span class="name">${inv.name || '（未命名）'}</span>
+      <span class="sep">·</span>
+      <span class="muted">歷年持股變動表</span>
+    </div>
+    <div class="sec">
+      <h2 class="sec-title">歷年持股變動彙總（共 ${inv.years.length} 個年度）</h2>
+      <div style="overflow-x:auto">
+        <table class="history-table">
+          <thead>
+            <tr>
+              <th rowspan="2">年度</th>
+              <th colspan="4">期初承轉</th>
+              <th rowspan="2">本年事件</th>
+              <th colspan="5">本年度損益認列</th>
+              <th colspan="5">期末餘額</th>
+            </tr>
+            <tr>
+              <th>股數</th><th>持股%</th><th>帳面值(財)</th><th>原始成本(稅)</th>
+              <th>認列投資收益</th><th>認列 OCI</th><th>收現金股利</th><th>獲配股票股利</th><th>處分損益(稅)</th>
+              <th>股數</th><th>持股%</th><th>帳面值(財)</th><th>原始成本(稅)</th><th>OCI 累計</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+      <div class="small" style="margin-top:8px;">
+        點選年度可跳到該年度詳情；本表「期末股數」與下年度「期初股數」應相符（年度資料拋轉自動帶入）。
+      </div>
+    </div>`;
+}
+
+function summarizeEvents(events) {
+  if (!events || events.length === 0) return '';
+  const counts = {};
+  for (const e of events) {
+    if (!e.type) continue;
+    counts[e.type] = (counts[e.type] || 0) + 1;
+  }
+  return Object.entries(counts).map(([t, c]) => `${t} ${c}`).join(' / ');
+}
+
+// ============================================================
+// 渲染 — 各區塊（與單年度詳情）
+// ============================================================
+function numInput(value, attrs) {
+  const negCls = (Number(value) < 0) ? ' numeric-neg' : '';
+  return `<input type="text" inputmode="decimal" class="numeric${negCls}" value="${fmtInput(value)}" ${attrs}>`;
+}
+
+function renderBasicInfo(co) {
+  return `
+  <div class="sec" id="in_basic">
+    <h2 class="sec-title">一、基本資料 / 期初承轉</h2>
+    <div class="grid">
+      <div class="label">被投資公司名稱</div>
+      <div class="input-cell"><input type="text" data-co="name" value="${co.name}" style="text-align:left"></div>
+      <div class="hint">同步顯示於左側清單與所有年度</div>
+
+      <div class="label">會計年度（民國）</div>
+      <div class="input-cell">${numInput(co.year, 'data-co="year"')}</div>
+      <div class="hint">可直接修改；變更後年度 tab 會自動重新排序</div>
+
+      <div class="label">期初持股股數</div>
+      <div class="roll-cell">${numInput(co.init_shares, 'data-co="init_shares"')}</div>
+      <div class="hint">上年度底稿期末股數（拋轉時自動帶入）</div>
+
+      <div class="label">期初子公司總發行股數</div>
+      <div class="roll-cell">${numInput(co.init_total, 'data-co="init_total"')}</div>
+      <div class="hint">商工登記公示資料 / 子公司去年期末股本 ÷ 面額</div>
+
+      <div class="label">期初持股比例</div>
+      <div class="calc">${co.init_total > 0 ? fmtPct(co.init_shares / co.init_total) : '—'}</div>
+      <div class="hint">＝ 期初持股股數 ÷ 期初子公司總股數</div>
+
+      <div class="label">期初投資帳面值（財）</div>
+      <div class="roll-cell">${numInput(co.init_bv, 'data-co="init_bv"')}</div>
+      <div class="hint">上年度底稿期末長投帳面值</div>
+
+      <div class="label">期初投資原始成本（稅）</div>
+      <div class="roll-cell">${numInput(co.init_cost, 'data-co="init_cost"')}</div>
+      <div class="hint">歷次取得之投入金額累計</div>
+
+      <div class="label">期初其他權益累計（OCI）</div>
+      <div class="roll-cell">${numInput(co.init_oci, 'data-co="init_oci"')}</div>
+      <div class="hint">上年度底稿期末 OCI 餘額（含正負號）</div>
+    </div>
+  </div>`;
+}
+
+function renderSubInfo(co) {
+  return `
+  <div class="sec" id="in_sub">
+    <h2 class="sec-title">二、被投資公司本期數字</h2>
+    <div class="note">來源：被投資公司會計師查核報告之損益表 / 綜合損益表 / 資產負債表 / 盈餘分配表</div>
+    <div class="grid">
+      <div class="label">本期稅後淨利（NI）</div>
+      <div class="input-cell">${numInput(co.sub_ni, 'data-co="sub_ni"')}</div>
+      <div class="hint">子公司損益表「本期淨利」</div>
+
+      <div class="label">本期其他綜合損益（OCI）</div>
+      <div class="input-cell">${numInput(co.sub_oci, 'data-co="sub_oci"')}</div>
+      <div class="hint">子公司綜合損益表 OCI 合計</div>
+
+      <div class="label">期末權益總額</div>
+      <div class="input-cell">${numInput(co.sub_eq_end, 'data-co="sub_eq_end"')}</div>
+      <div class="hint">子公司期末資產負債表「權益總計」</div>
+
+      <div class="label">期末總發行股數</div>
+      <div class="input-cell">${numInput(co.sub_shares_end, 'data-co="sub_shares_end"')}</div>
+      <div class="hint">含本年度盈轉配股 / 現增 / 減資後</div>
+    </div>
+  </div>`;
+}
+
+function renderEventTable(co) {
+  const types = ['出售', '現金增資認購', '股份受讓', '股份讓與', '受贈', '減資退現', '收現金股利', '盈餘轉增資'];
+  const headers = `
+    <tr>
+      <th style="width:110px">日期 (民國)</th>
+      <th style="width:120px">類型</th>
+      <th style="width:120px">股數 / 配股股數</th>
+      <th style="width:110px">每股價/面額</th>
+      <th style="width:110px">證交稅 / 手續費</th>
+      <th style="width:130px">金額（自動）</th>
+      <th style="width:120px">備註</th>
+      <th style="width:50px"></th>
+    </tr>`;
+  const rows = (co.events || []).map((ev, idx) => {
+    const subtotal = (ev.shares || 0) * (ev.price || 0);
+    return `<tr data-evrow="${idx}">
+      <td><input type="text" data-ev="${idx}" data-key="date" value="${ev.date || ''}" placeholder="${co.year}.07.01" style="text-align:left"></td>
+      <td><select data-ev="${idx}" data-key="type">${types.map(t => `<option ${t===ev.type?'selected':''}>${t}</option>`).join('')}</select></td>
+      <td>${numInput(ev.shares || 0, `data-ev="${idx}" data-key="shares"`)}</td>
+      <td>${numInput(ev.price || 0, `data-ev="${idx}" data-key="price"`)}</td>
+      <td>${numInput(ev.tax || 0, `data-ev="${idx}" data-key="tax"`)}</td>
+      <td class="num ev-amt">${ev.type === '收現金股利' ? numInput(ev.amount || 0, `data-ev="${idx}" data-key="amount"`) : fmt(subtotal)}</td>
+      <td><input type="text" data-ev="${idx}" data-key="note" value="${ev.note || ''}" style="text-align:left"></td>
+      <td style="text-align:center"><button class="del" data-evdel="${idx}">×</button></td>
+    </tr>`;
+  }).join('');
+
+  return `
+  <div class="sec" id="in_events">
+    <h2 class="sec-title">三、本年度股權變動 / 股利事件</h2>
+    <div class="note">
+      <strong>類型說明：</strong><br>
+      <strong>出售</strong>：股數＝出售股數（正數）；單價＝每股賣價；證交稅／手續費另計<br>
+      <strong>現金增資認購</strong>：股數＝認購股數；單價＝認購價；手續費（如有）填稅費欄<br>
+      <strong>受贈</strong>：股數＝受贈股數；單價＝時價（會計與稅務認列基礎）<br>
+      <strong>減資退現</strong>：股數＝減資股數；單價＝每股退回現金<br>
+      <strong>收現金股利</strong>：直接於「金額」欄填入總現金股利金額；股數／單價可留 0<br>
+      <strong>盈餘轉增資</strong>：股數＝獲配股數；單價填面額 10；稅務原始成本將自動 +股數×10<br>
+      <strong>股份受讓</strong>：股數＝受讓股數；單價＝每股成交價（向被投資公司其他股東或外部投資人購入；過戶費／印花稅可填稅費欄）<br>
+      <strong>股份讓與</strong>：股數＝轉讓股數；單價＝每股成交價（轉讓予被投資公司其他股東或外部投資人；證交稅依規定填入稅費欄）
+    </div>
+    <table class="events">
+      <thead>${headers}</thead>
+      <tbody>${rows || '<tr><td colspan="8" style="text-align:center;color:#94a3b8;padding:20px">尚未新增任何事件</td></tr>'}</tbody>
+    </table>
+    <div style="margin-top:8px;">
+      <button class="primary" id="add_event">＋ 新增事件</button>
+    </div>
+  </div>`;
+}
+
+function renderSegments(r) {
+  if (!r) return '<div class="sec" id="out_segments"></div>';
+  const fmtDate = d => d ? `${d.getFullYear()-1911}.${String(d.getMonth()+1).padStart(2,'0')}.${String(d.getDate()).padStart(2,'0')}` : '—';
+  const rows = r.segments.map((s, i) => {
+    const isLast = (i === r.segments.length - 1);
+    const displayEnd = isLast ? new Date(s.endDate.getTime() - 86400000) : s.endDate;
+    let pillCls = 'y';
+    if (s.event) {
+      const t = s.event.type;
+      if (t === '出售' || t === '股份讓與') pillCls = 'r';
+      else if (t === '現金增資認購' || t === '股份受讓' || t === '受贈') pillCls = 'b';
+      else if (t === '收現金股利') pillCls = 'g';
+    }
+    const evDesc = s.event ? `<span class="pill ${pillCls}">${s.event.type}</span>` : '';
+    return `<tr>
+      <td>${i+1}</td>
+      <td>${fmtDate(s.startDate)} ~ ${fmtDate(displayEnd)}</td>
+      <td class="num">${fmt(s.days)}</td>
+      <td class="num">${fmt(s.shares)}</td>
+      <td class="num">${fmtPct(s.holdingPct)}</td>
+      <td class="num">${fmt(s.segNIPortion)}</td>
+      <td class="num">${fmt(s.recogNI)}</td>
+      <td class="num">${fmt(s.recogOCI)}</td>
+      <td>${evDesc}</td>
+    </tr>`;
+  }).join('');
+  return `
+  <div class="sec" id="out_segments">
+    <h2 class="sec-title">四、時間段拆分明細（依事件日切段，C1 完整版方法）</h2>
+    <table class="segs">
+      <thead><tr>
+        <th>段</th><th>起 ~ 迄</th><th>天數</th><th>段起始股數</th><th>段持股 %</th>
+        <th>段 NI 份額</th><th>認列投資收益</th><th>認列 OCI</th><th>段末事件</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+      <tfoot style="background:#f1f5f9;font-weight:600;">
+        <tr>
+          <td colspan="2">全年彙總</td>
+          <td class="num">${fmt(r.totDays)}</td>
+          <td class="num">—</td>
+          <td class="num">${fmtPct(r.weightedPct)}</td>
+          <td class="num">${fmt(r.co.sub_ni)}</td>
+          <td class="num">${fmt(r.totalRecogNI)}</td>
+          <td class="num">${fmt(r.totalRecogOCI)}</td>
+          <td></td>
+        </tr>
+      </tfoot>
+    </table>
+    <div class="small" style="margin-top:6px;">
+      認列投資收益 ＝ Σ（段 NI 份額 × 段持股 %） ＝ 子公司 NI × 全年加權持股 %（容許 ±1 元尾差）<br>
+      段 NI 份額 ＝ 子公司 NI × 段天數 ÷ 全年 ${r.totDays} 天
+    </div>
+  </div>`;
+}
+
+function renderSummary(r) {
+  if (!r) return '<div class="sec" id="out_summary"></div>';
+  return `
+  <div class="sec" id="out_summary">
+    <h2 class="sec-title">五、全年彙總</h2>
+    <div class="grid">
+      <div class="label">全年加權平均持股比例</div>
+      <div class="calc">${fmtPct(r.weightedPct)}</div>
+      <div class="hint">＝ Σ（段持股 % × 段天數）÷ 全年天數</div>
+
+      <div class="label">期末持股股數</div>
+      <div class="calc">${fmt(r.endShares)}</div>
+      <div class="hint">＝ 期初 + 各事件股數變動</div>
+
+      <div class="label">期末持股比例</div>
+      <div class="calc">${fmtPct(r.endPct)}</div>
+      <div class="hint">＝ 期末持股股數 ÷ 子公司期末總股數</div>
+
+      <div class="label">認列權益法投資收益（財）</div>
+      <div class="calc">${fmt(r.totalRecogNI)}</div>
+      <div class="hint">時間段加權法</div>
+
+      <div class="label">認列其他綜合損益（財）</div>
+      <div class="calc">${fmt(r.totalRecogOCI)}</div>
+      <div class="hint">時間段加權法</div>
+
+      <div class="label">收到現金股利（總額）</div>
+      <div class="calc">${fmt(r.totalCashDiv)}</div>
+      <div class="hint">採權益法時不入損益，直接抵減投資帳面值</div>
+
+      <div class="label">獲配股票股利股數</div>
+      <div class="calc">${fmt(r.totalStockDivShares)}</div>
+      <div class="hint">財報不入帳；稅務原始成本 +股數×10</div>
+
+      <div class="label">處分損益 — 財務面（合計）</div>
+      <div class="calc">${fmtSigned(r.totalGainFin)}</div>
+      <div class="hint">出售價款 − 證交稅 − 帳面值除列 ＋ 對應 OCI 重分類</div>
+
+      <div class="label">處分損益 — 稅務面（合計）</div>
+      <div class="calc">${fmtSigned(r.totalGainTax)}</div>
+      <div class="hint">出售價款 − 證交稅 − 原始成本除列</div>
+
+      <div class="label">財稅差(處分)</div>
+      <div class="calc">${fmtSigned(r.totalGainTax - r.totalGainFin)}</div>
+      <div class="hint">＝ 稅務 − 財務（用於 E 表帳外調整）</div>
+    </div>
+  </div>`;
+}
+
+function renderJournalEntries(r) {
+  if (!r) return '<div class="sec" id="out_entries"></div>';
+  const co = r.co;
+  const subName = co.name || '被投資公司';
+  const entries = [];
+
+  if (r.totalRecogNI !== 0) {
+    if (r.totalRecogNI >= 0) {
+      entries.push({ head: `① 認列權益法投資收益（全年合計）`, rows: [
+        ['Dr.', '採權益法之投資 — ' + subName, r.totalRecogNI, ''],
+        ['Cr.', '採權益法認列之關聯企業及合資損益 — 投資收益', '', r.totalRecogNI],
+      ]});
+    } else {
+      entries.push({ head: `① 認列權益法投資損失（全年合計）`, rows: [
+        ['Dr.', '採權益法認列之關聯企業及合資損益 — 投資損失', Math.abs(r.totalRecogNI), ''],
+        ['Cr.', '採權益法之投資 — ' + subName, '', Math.abs(r.totalRecogNI)],
+      ]});
+    }
+  }
+
+  if (r.totalRecogOCI !== 0) {
+    if (r.totalRecogOCI >= 0) {
+      entries.push({ head: `② 認列其他綜合損益份額（全年合計）`, rows: [
+        ['Dr.', '採權益法之投資 — ' + subName, r.totalRecogOCI, ''],
+        ['Cr.', '其他綜合損益 — 採權益法之投資公司未實現評價損益', '', r.totalRecogOCI],
+      ]});
+    } else {
+      entries.push({ head: `② 認列其他綜合損益份額（全年合計）`, rows: [
+        ['Dr.', '其他綜合損益 — 採權益法之投資公司未實現評價損益', Math.abs(r.totalRecogOCI), ''],
+        ['Cr.', '採權益法之投資 — ' + subName, '', Math.abs(r.totalRecogOCI)],
+      ]});
+    }
+  }
+
+  r.segments.forEach(seg => {
+    if (!seg.event) return;
+    const ev = seg.event;
+    const im = seg.evImpact;
+    const dateStr = `${seg.endDate.getFullYear()-1911}.${String(seg.endDate.getMonth()+1).padStart(2,'0')}.${String(seg.endDate.getDate()).padStart(2,'0')}`;
+
+    switch (ev.type) {
+      case '出售': {
+        const r1 = [
+          ['Dr.', '銀行存款（出售淨額）', im.proceeds - im.tax, ''],
+          ['Cr.', '採權益法之投資 — ' + subName + '（按比例除列）', '', im.bvRemoved],
+        ];
+        const dispGain = im.proceeds - im.tax - im.bvRemoved;
+        if (dispGain >= 0) r1.push(['Cr.', '處分投資利益 — 採權益法之投資', '', dispGain]);
+        else r1.splice(1, 0, ['Dr.', '處分投資損失 — 採權益法之投資', Math.abs(dispGain), '']);
+        entries.push({ head: `③ 出售（${dateStr}）${fmt(im.saleShares)} 股 @ ${fmt(ev.price)} 元`, rows: r1 });
+        if (im.ociRemoved !== 0) {
+          if (im.ociRemoved > 0) {
+            entries.push({ head: `　　└─ OCI 重分類至損益（出售比例 ${(im.ratio*100).toFixed(2)}%）`, rows: [
+              ['Dr.', '其他綜合損益 — 採權益法之投資公司未實現評價損益', im.ociRemoved, ''],
+              ['Cr.', '處分投資利益 — 採權益法之投資（OCI 重分類）', '', im.ociRemoved],
+            ]});
+          } else {
+            entries.push({ head: `　　└─ OCI 重分類至損益（出售比例 ${(im.ratio*100).toFixed(2)}%）`, rows: [
+              ['Dr.', '處分投資損失 — 採權益法之投資（OCI 重分類）', Math.abs(im.ociRemoved), ''],
+              ['Cr.', '其他綜合損益 — 採權益法之投資公司未實現評價損益', '', Math.abs(im.ociRemoved)],
+            ]});
+          }
+        }
+        break;
+      }
+      case '現金增資認購': {
+        entries.push({ head: `③ 現金增資認購（${dateStr}）${fmt(im.buyShares)} 股 @ ${fmt(ev.price)} 元`, rows: [
+          ['Dr.', '採權益法之投資 — ' + subName, im.amount, ''],
+          ['Cr.', '銀行存款', '', im.amount + (im.tax || 0)],
+          ...(im.tax ? [['Dr.', '手續費（如有）', im.tax, '']] : []),
+        ]});
+        break;
+      }
+      case '受贈': {
+        entries.push({ head: `③ 受贈（${dateStr}）${fmt(im.buyShares)} 股 @ 時價 ${fmt(ev.price)} 元`, rows: [
+          ['Dr.', '採權益法之投資 — ' + subName, im.amount, ''],
+          ['Cr.', '受贈收入 / 業外收入', '', im.amount],
+        ]});
+        break;
+      }
+      case '減資退現': {
+        entries.push({ head: `③ 減資退現（${dateStr}）減少 ${fmt(im.reduceShares)} 股，每股退回 ${fmt(ev.price)} 元`, rows: [
+          ['Dr.', '銀行存款', im.cashBack, ''],
+          ['Cr.', '採權益法之投資 — ' + subName + '（按比例除列）', '', im.bvReduced],
+          ...(im.cashBack !== im.bvReduced ? [
+            im.cashBack > im.bvReduced
+              ? ['Cr.', '處分投資利益', '', im.cashBack - im.bvReduced]
+              : ['Dr.', '處分投資損失', im.bvReduced - im.cashBack, '']
+          ] : []),
+        ]});
+        break;
+      }
+      case '收現金股利': {
+        entries.push({ head: `③ 收現金股利（${dateStr}）`, rows: [
+          ['Dr.', '銀行存款', im.divAmt, ''],
+          ['Cr.', '採權益法之投資 — ' + subName + '（採權益法不入損益，抵減投資）', '', im.divAmt],
+        ]});
+        break;
+      }
+      case '盈餘轉增資': {
+        entries.push({ head: `③ 盈餘轉增資配股（${dateStr}）獲配 ${fmt(im.stockShares)} 股`, rows: [
+          ['', '財務會計：不作分錄（僅備忘股數變動）', '', ''],
+          ['', '稅務原始成本：+ ' + fmt(im.stockDivAmount) + ' 元（按面額認列）', '', ''],
+        ]});
+        break;
+      }
+      case '股份受讓': {
+        entries.push({ head: `③ 股份受讓（${dateStr}）${fmt(im.buyShares)} 股 @ ${fmt(ev.price)} 元（向其他股東或外部投資人購入）`, rows: [
+          ['Dr.', '採權益法之投資 — ' + subName, im.amount, ''],
+          ['Cr.', '銀行存款（支付予出讓方）', '', im.amount + (im.tax || 0)],
+          ...(im.tax ? [['Dr.', '證交稅 / 印花稅 / 過戶費（如有）', im.tax, '']] : []),
+        ]});
+        break;
+      }
+      case '股份讓與': {
+        const r2 = [
+          ['Dr.', '銀行存款（轉讓淨額）', im.proceeds - im.tax, ''],
+          ['Cr.', '採權益法之投資 — ' + subName + '（按比例除列）', '', im.bvRemoved],
+        ];
+        const dispGain2 = im.proceeds - im.tax - im.bvRemoved;
+        if (dispGain2 >= 0) r2.push(['Cr.', '處分投資利益 — 採權益法之投資', '', dispGain2]);
+        else r2.splice(1, 0, ['Dr.', '處分投資損失 — 採權益法之投資', Math.abs(dispGain2), '']);
+        entries.push({ head: `③ 股份讓與（${dateStr}）${fmt(im.saleShares)} 股 @ ${fmt(ev.price)} 元（轉讓予其他股東或外部投資人）`, rows: r2 });
+        if (im.ociRemoved !== 0) {
+          if (im.ociRemoved > 0) {
+            entries.push({ head: `　　└─ OCI 重分類至損益（轉讓比例 ${(im.ratio*100).toFixed(2)}%）`, rows: [
+              ['Dr.', '其他綜合損益 — 採權益法之投資公司未實現評價損益', im.ociRemoved, ''],
+              ['Cr.', '處分投資利益 — 採權益法之投資（OCI 重分類）', '', im.ociRemoved],
+            ]});
+          } else {
+            entries.push({ head: `　　└─ OCI 重分類至損益（轉讓比例 ${(im.ratio*100).toFixed(2)}%）`, rows: [
+              ['Dr.', '處分投資損失 — 採權益法之投資（OCI 重分類）', Math.abs(im.ociRemoved), ''],
+              ['Cr.', '其他綜合損益 — 採權益法之投資公司未實現評價損益', '', Math.abs(im.ociRemoved)],
+            ]});
+          }
+        }
+        break;
+      }
+    }
+  });
+
+  if (entries.length === 0) {
+    return `<div class="sec" id="out_entries">
+      <h2 class="sec-title">六、應做之會計分錄</h2>
+      <div class="small">尚無分錄需求（請先填入子公司本期 NI/OCI 或新增事件）</div>
+    </div>`;
+  }
+
+  const html = entries.map(e => `<div class="entry">
+    <div class="ehead">${e.head}</div>
+    <table>${e.rows.map(([dc, acct, dr, cr]) => `
+      <tr>
+        <td style="width:30px">${dc}</td>
+        <td class="acct ${dc==='Cr.'?'cr':''}">${acct}</td>
+        <td class="amt">${dr === '' ? '' : (typeof dr === 'number' ? fmt(dr) : dr)}</td>
+        <td class="amt">${cr === '' ? '' : (typeof cr === 'number' ? fmt(cr) : cr)}</td>
+      </tr>`).join('')}</table>
+  </div>`).join('');
+
+  return `
+  <div class="sec" id="out_entries">
+    <h2 class="sec-title">六、應做之會計分錄</h2>
+    <div class="note">以下為帳上應做之分錄。① ② 為全年合計（年底沖銷）；③ 系列為各事件當日分錄。</div>
+    ${html}
+  </div>`;
+}
+
+function renderTaxOutput(r) {
+  if (!r) return '<div class="sec" id="out_tax"></div>';
+  const col99 = r.totalGainTax;
+  const col58 = r.totalCashDiv + r.totalStockDivAmount;
+  const adjEquityIncome = -r.totalRecogNI;
+  const adjDispDiff = r.totalGainTax - r.totalGainFin;
+  const adjStockDiv = r.totalStockDivAmount;
+
+  return `
+  <div class="sec" id="out_tax">
+    <h2 class="sec-title">七、報稅輸出 — 應免稅分攤表 / E 表帳外調整</h2>
+    <h3 style="font-size:14px;margin:12px 0 6px;">A. 應免稅分攤表填報數</h3>
+    <div class="grid">
+      <div class="label">99 欄：停徵之證交（期交）所得</div>
+      <div class="out">${fmtSigned(col99)}</div>
+      <div class="hint">＝ 處分損益（稅務面）；填至應免稅分攤表 B 欄（免稅收入）</div>
+
+      <div class="label">58 欄：不計入所得額之股利</div>
+      <div class="out">${fmtSigned(col58)}</div>
+      <div class="hint">＝ 現金股利 ${fmt(r.totalCashDiv)} ＋ 股票股利按面額 ${fmt(r.totalStockDivAmount)}；填至 D / F 欄</div>
+    </div>
+    <h3 style="font-size:14px;margin:16px 0 6px;">B. E 表帳外調整（財報 → 申報數）</h3>
+    <table class="entries">
+      <thead><tr><th style="width:280px">調整項目</th><th>科目 / 說明</th><th style="width:140px" class="num">調整數</th></tr></thead>
+      <tbody>
+        <tr><td>① 採權益法投資收益（剔除）</td><td>財報認列 ${fmt(r.totalRecogNI)}，稅務不認 → 全額帳外剔除</td><td class="num">${fmtSigned(adjEquityIncome)}</td></tr>
+        <tr><td>② 處分長投損益（財稅差）</td><td>財報處分損益 ${fmtSigned(r.totalGainFin)} 改為稅務 ${fmtSigned(r.totalGainTax)}（再由 99 欄列為免稅）</td><td class="num">${fmtSigned(adjDispDiff)}</td></tr>
+        ${r.totalStockDivAmount > 0 ? `<tr><td>③ 盈轉配股（稅務認列）</td><td>財報不入帳；稅務按面額認列為股利收入後列 58 欄</td><td class="num">${fmtSigned(adjStockDiv)}</td></tr>` : ''}
+      </tbody>
+    </table>
+    <div class="note" style="margin-top:10px;">
+      <strong>承辦操作：</strong> 將上表「調整數」填入 E 表「帳外剔除」欄；99/58 欄填入應免稅分攤表；F 表全年所得額減 99 欄 + 58 欄後得課稅所得額。
+    </div>
+  </div>`;
+}
+
+function renderEndCarry(r) {
+  if (!r) return '<div class="sec" id="out_endcarry"></div>';
+  const inv = curInvestee();
+  const nextY = r.co.year + 1;
+  const nextExists = inv && inv.years.some(y => y.year === nextY);
+  return `
+  <div class="sec" id="out_endcarry">
+    <h2 class="sec-title">八、期末餘額（拋轉至下年度）</h2>
+    <div class="grid">
+      <div class="label">期末持股股數</div>
+      <div class="end-cell">${fmt(r.endShares)}</div>
+      <div class="hint"></div>
+
+      <div class="label">期末投資帳面值（財）</div>
+      <div class="end-cell">${fmt(r.endBV)}</div>
+      <div class="hint">期初 ＋ 認列損益 ＋ 認列 OCI ＋ 新購 − 減資退現 − 收股利 − 出售除列</div>
+
+      <div class="label">期末投資原始成本（稅）</div>
+      <div class="end-cell">${fmt(r.endCost)}</div>
+      <div class="hint">期初成本 ＋ 新購 ＋ 盈轉配股(面額) − 減資退現 − 出售除列</div>
+
+      <div class="label">期末其他權益累計（OCI）</div>
+      <div class="end-cell">${fmtSigned(r.endOCI)}</div>
+      <div class="hint">期初 OCI ＋ 認列 OCI − 出售 OCI 重分類</div>
+
+      <div class="label">期末持股比例</div>
+      <div class="end-cell">${fmtPct(r.endPct)}</div>
+      <div class="hint">＝ 期末股數 ÷ 子公司期末總股數</div>
+    </div>
+    <div style="margin-top:14px; padding-top:12px; border-top:1px dashed var(--c-border); display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+      ${nextExists
+        ? `<span class="small">下年度（${nextY}）已建立，<a href="#" id="goto_next_year" style="color:var(--c-primary)">點此切換 →</a></span>`
+        : `<button class="primary" id="carry_forward_btn">⇒ 拋轉並建立 ${nextY} 年度</button>
+           <span class="small">將上方期末股數 / 帳面值 / 原始成本 / OCI 自動帶入新年度的「期初承轉」欄位</span>`
+      }
+    </div>
+  </div>`;
+}
+
+function renderChecks(r) {
+  if (!r) return '<div class="sec" id="out_checks"></div>';
+  const checks = [];
+  const expectedNI = Math.round(r.co.sub_ni * r.weightedPct);
+  const niDiff = r.totalRecogNI - expectedNI;
+  checks.push({
+    ok: Math.abs(niDiff) <= Math.max(Math.abs(expectedNI) * 0.001, 10),
+    msg: `<strong>① 認列投資收益勾稽</strong>：時間段加總 ${fmt(r.totalRecogNI)}　vs.　NI ${fmt(r.co.sub_ni)} × 加權 ${fmtPct(r.weightedPct)} ＝ ${fmt(expectedNI)}　差額 ${fmtSigned(niDiff)}`
+  });
+  checks.push({
+    ok: Math.abs(r.bvDiff) < r.bvTol,
+    msg: `<strong>② 期末帳面值勾稽</strong>：${fmt(r.endBV)}　vs.　${fmt(r.co.sub_eq_end)} × ${fmtPct(r.endPct)} ＝ ${fmt(r.expectedEndBV)}　差額 ${fmtSigned(r.bvDiff)}`
+  });
+  if (r.sales.length > 0) {
+    checks.push({ ok: true,
+      msg: `<strong>③ 99 欄勾稽</strong>：${fmt(r.totalGainTax)} ＝ 出售價款 ${fmt(r.totalSaleProceeds)} − 證交稅 ${fmt(r.totalSaleTax)} − 原始成本除列 ${fmt(r.totalCostRemoved)}`});
+  } else {
+    checks.push({ ok: true, msg: `<strong>③ 99 欄勾稽</strong>：本年度無出售，99 欄為 0` });
+  }
+  const eventShareDelta = r.segments.reduce((s, seg) => {
+    if (!seg.event) return s;
+    const im = seg.evImpact;
+    if (seg.event.type === '出售' || seg.event.type === '股份讓與') return s - (im.saleShares || 0);
+    if (seg.event.type === '減資退現') return s - (im.reduceShares || 0);
+    if (seg.event.type === '現金增資認購' || seg.event.type === '受贈' || seg.event.type === '股份受讓') return s + (im.buyShares || 0);
+    if (seg.event.type === '盈餘轉增資') return s + (im.stockShares || 0);
+    return s;
+  }, 0);
+  const expectedEndShares = r.co.init_shares + eventShareDelta;
+  checks.push({
+    ok: Math.abs(r.endShares - expectedEndShares) < 1,
+    msg: `<strong>④ 期末股數勾稽</strong>：期末 ${fmt(r.endShares)} ＝ 期初 ${fmt(r.co.init_shares)} ${eventShareDelta>=0?'＋':'−'} 事件變動 ${fmt(Math.abs(eventShareDelta))}`
+  });
+  return `
+  <div class="sec" id="out_checks" style="background:var(--c-check)">
+    <h2 class="sec-title">九、勾稽（全綠才可結案）</h2>
+    ${checks.map(c => `<div class="checkrow"><span class="led ${c.ok?'green':'red'}"></span><div>${c.msg}</div></div>`).join('')}
+  </div>`;
+}
+
+// ============================================================
+// 只重算輸出區塊（不動輸入欄位）
+// ============================================================
+function recomputeOutputs() {
+  const inv = curInvestee();
+  const yr = curYear();
+  if (!inv || !yr) return;
+  const co = { ...yr, name: inv.name };
+  const r = compute(co);
+  const replace = (id, html) => {
+    const el = document.getElementById(id);
+    if (el) el.outerHTML = html;
+  };
+  replace('out_segments', renderSegments(r));
+  replace('out_summary',  renderSummary(r));
+  replace('out_entries',  renderJournalEntries(r));
+  replace('out_tax',      renderTaxOutput(r));
+  replace('out_endcarry', renderEndCarry(r));
+  replace('out_checks',   renderChecks(r));
+
+  const initPctCell = document.querySelector('#in_basic .grid .calc');
+  if (initPctCell) {
+    initPctCell.textContent = yr.init_total > 0 ? fmtPct(yr.init_shares / yr.init_total) : '—';
+  }
+}
+
+// ============================================================
+// 事件綁定
+// ============================================================
+function bindMainEvents() {
+  document.querySelectorAll('input[data-co], select[data-co]').forEach(el => {
+    el.addEventListener('input', e => {
+      const inv = curInvestee();
+      const yr = curYear();
+      if (!inv || !yr) return;
+      const key = e.target.dataset.co;
+      // year 改在 blur 才處理，避免使用者打字過程中年度被破壞
+      if (key === 'year') return;
+
+      const v = NUMERIC_CO_KEYS.includes(key) ? parseNum(e.target.value) : e.target.value;
+      if (key === 'name') {
+        inv.name = v;
+        renderInvesteeList();
+        const ptEl = document.getElementById('pt_investee');
+        if (ptEl) ptEl.textContent = v || '（未命名）';
+      } else {
+        yr[key] = v;
+      }
+      save();
+      if (NUMERIC_CO_KEYS.includes(key)) {
+        e.target.classList.toggle('numeric-neg', v < 0);
+      }
+      recomputeOutputs();
+    });
+    el.addEventListener('blur', e => {
+      const inv = curInvestee();
+      const yr = curYear();
+      if (!inv || !yr) return;
+      const key = e.target.dataset.co;
+
+      if (key === 'year') {
+        const newY = parseNum(e.target.value);
+        if (!isFinite(newY) || newY < 1 || newY > 999) {
+          e.target.value = fmtInput(yr.year);
+          return;
+        }
+        if (newY === yr.year) {
+          e.target.value = fmtInput(yr.year);
+          return;
+        }
+        if (inv.years.some(y => y !== yr && y.year === newY)) {
+          alert(`${newY} 年度已存在，請選其他年度`);
+          e.target.value = fmtInput(yr.year);
+          return;
+        }
+        yr.year = newY;
+        state.current_year = newY;
+        inv.years.sort((a, b) => a.year - b.year);
+        save();
+        renderMain();
+        return;
+      }
+
+      if (NUMERIC_CO_KEYS.includes(key)) {
+        e.target.value = fmtInput(yr[key]);
+      }
+    });
+  });
+
+  document.querySelectorAll('input[data-ev], select[data-ev]').forEach(el => {
+    el.addEventListener('input', e => {
+      const yr = curYear();
+      if (!yr) return;
+      const idx = +e.target.dataset.ev;
+      const key = e.target.dataset.key;
+      let v;
+      if (e.target.tagName === 'SELECT' || !NUMERIC_EV_KEYS.includes(key)) v = e.target.value;
+      else v = parseNum(e.target.value);
+      yr.events[idx][key] = v;
+      save();
+      if (NUMERIC_EV_KEYS.includes(key)) {
+        e.target.classList.toggle('numeric-neg', v < 0);
+      }
+      if (key === 'type') {
+        renderMain();
+      } else {
+        if ((key === 'shares' || key === 'price') && yr.events[idx].type !== '收現金股利') {
+          const row = e.target.closest('tr');
+          if (row) {
+            const amtCell = row.querySelector('td.ev-amt');
+            if (amtCell) amtCell.innerHTML = fmt((yr.events[idx].shares || 0) * (yr.events[idx].price || 0));
+          }
+        }
+        recomputeOutputs();
+      }
+    });
+    el.addEventListener('blur', e => {
+      const yr = curYear();
+      if (!yr) return;
+      const idx = +e.target.dataset.ev;
+      const key = e.target.dataset.key;
+      if (yr.events[idx] && NUMERIC_EV_KEYS.includes(key)) {
+        e.target.value = fmtInput(yr.events[idx][key]);
+      }
+    });
+  });
+
+  document.querySelectorAll('button[data-evdel]').forEach(b => {
+    b.addEventListener('click', () => {
+      const yr = curYear();
+      yr.events.splice(+b.dataset.evdel, 1);
+      save();
+      renderMain();
+    });
+  });
+
+  document.getElementById('add_event')?.addEventListener('click', () => {
+    const yr = curYear();
+    yr.events.push({date: '', type: '出售', shares: 0, price: 0, tax: 0, amount: 0, note: ''});
+    save();
+    renderMain();
+  });
+
+  // 拋轉至下年度
+  document.getElementById('carry_forward_btn')?.addEventListener('click', () => {
+    const yr = curYear();
+    if (!yr) return;
+    addYear(yr.year + 1);
+  });
+  document.getElementById('goto_next_year')?.addEventListener('click', e => {
+    e.preventDefault();
+    const yr = curYear();
+    if (!yr) return;
+    state.current_year = yr.year + 1;
+    save();
+    renderMain();
+  });
+
+  // 歷年表「年度」欄位點擊跳轉
+  document.querySelectorAll('[data-goto]').forEach(td => {
+    td.addEventListener('click', () => {
+      state.current_year = parseInt(td.dataset.goto);
+      state.view_mode = 'detail';
+      save();
+      renderMain();
+    });
+  });
+}
+
+// ============================================================
+// 新增 / 拋轉
+// ============================================================
+function addInvestee() {
+  // 提示使用者輸入「起始年度」— 即希望從哪一年開始建檔記錄
+  const input = prompt('請輸入「起始年度」（民國年）。\n從這個年度開始建立持股紀錄，後續可依序拋轉至下年度。', 110);
+  if (input === null) return;
+  const startY = parseInt(input);
+  if (!isFinite(startY) || startY < 1) { alert('請輸入有效年度'); return; }
+
+  const inv = newInvestee('新被投資公司', startY);
+  state.investees.push(inv);
+  state.current_investee_id = inv.id;
+  state.current_year = startY;
+  state.view_mode = 'detail';
+  save();
+  renderAll();
+}
+
+function addYear(autoYear) {
+  const inv = curInvestee();
+  if (!inv) return;
+  const existingYears = inv.years.map(y => y.year);
+  let newY;
+  if (autoYear !== undefined) {
+    newY = autoYear;
+  } else {
+    const defaultY = existingYears.length > 0 ? Math.max(...existingYears) + 1 : 110;
+    const input = prompt(`請輸入新年度（民國年）。\n例如要新增過去年度，可直接輸入該年（如 109、110）。`, defaultY);
+    if (input === null) return; // 取消
+    const trimmed = String(input).trim();
+    if (trimmed === '') return; // 空白靜默忽略
+    newY = parseInt(trimmed);
+    if (!isFinite(newY) || newY < 1) {
+      alert('請輸入有效的民國年度數字（例如 110、113）');
+      return;
+    }
+  }
+  if (existingYears.includes(newY)) { alert(`${newY} 年度已存在`); return; }
+
+  const yObj = newYear(newY);
+
+  // 從上一年（newY - 1）拋轉期末值
+  const prevY = inv.years.find(y => y.year === newY - 1);
+  if (prevY) {
+    const co = { ...prevY, name: inv.name };
+    const r = compute(co);
+    if (r) {
+      yObj.init_shares = r.endShares;
+      yObj.init_total = prevY.sub_shares_end || prevY.init_total;
+      yObj.init_bv = r.endBV;
+      yObj.init_cost = r.endCost;
+      yObj.init_oci = r.endOCI;
+    }
+  }
+
+  inv.years.push(yObj);
+  inv.years.sort((a, b) => a.year - b.year);
+  state.current_year = newY;
+  state.view_mode = 'detail';
+  save();
+  renderMain();
+}
+
+// ============================================================
+// 全域綁定
+// ============================================================
+function renderAll() {
+  renderInvesteeList();
+  renderMain();
+}
+
+document.getElementById('add_company').addEventListener('click', addInvestee);
+
+const investorInput = document.getElementById('investor_name_input');
+investorInput.value = state.investor_name || '';
+investorInput.addEventListener('input', e => {
+  state.investor_name = e.target.value;
+  save();
+  const ptEl = document.getElementById('pt_investor');
+  if (ptEl) ptEl.textContent = e.target.value || '（未設定）';
+});
+
+document.getElementById('export_btn').addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify(state, null, 2)], {type: 'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `權益法計算_${new Date().toISOString().slice(0,10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+});
+document.getElementById('import_btn').addEventListener('click', () => {
+  document.getElementById('import_file').click();
+});
+document.getElementById('import_file').addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    try {
+      const imported = JSON.parse(ev.target.result);
+      // 支援 v2 / v3 格式
+      if (imported.companies && !imported.investees) {
+        state = migrateV2(imported);
+      } else {
+        state = imported;
+        if (!state.view_mode) state.view_mode = 'detail';
+      }
+      save();
+      renderAll();
+    } catch (err) { alert('匯入失敗：' + err.message); }
+  };
+  reader.readAsText(file);
+});
+
+// 初始：若無資料，建立一個示例
+if (state.investees.length === 0) {
+  const sample = newInvestee('範例子公司', 109);
+  Object.assign(sample.years[0], {
+    init_shares: 1000000, init_total: 5000000,
+    init_bv: 20000000, init_cost: 15000000, init_oci: -500000,
+    sub_ni: 8000000, sub_oci: -800000,
+    sub_eq_end: 102200000, sub_shares_end: 5000000,
+  });
+  // 加 110 年度（從 109 拋轉）
+  const y110 = newYear(110);
+  const co109 = { ...sample.years[0], name: sample.name };
+  const r109 = compute(co109);
+  Object.assign(y110, {
+    init_shares: r109.endShares, init_total: 5000000,
+    init_bv: r109.endBV, init_cost: r109.endCost, init_oci: r109.endOCI,
+    sub_ni: 10000000, sub_oci: -1000000,
+    sub_eq_end: 104000000, sub_shares_end: 5000000,
+    events: [
+      { date: '110.06.30', type: '收現金股利', shares: 0, price: 0, tax: 0, amount: 1000000, note: '每股 1 元' },
+      { date: '110.10.15', type: '出售', shares: 200000, price: 21, tax: 1260, note: '' },
+    ],
+  });
+  sample.years.push(y110);
+  state.investees = [sample];
+  state.current_investee_id = sample.id;
+  state.current_year = 110;
+  save();
+}
+
+renderAll();
+</script>
+
+</body>
+</html>
