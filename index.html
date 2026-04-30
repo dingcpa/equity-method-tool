@@ -331,8 +331,15 @@ function defaultState() {
 function newYear(year) {
   return {
     year,
-    init_shares: 0, init_total: 0, init_bv: 0, init_cost: 0, init_oci: 0,
-    sub_ni: 0, sub_oci: 0, sub_eq_end: 0, sub_shares_end: 0,
+    init_shares: 0,
+    init_total: 0,           // 期初被投資公司總發行股數（含庫藏股）
+    init_outstanding: 0,     // 期初流通在外股數（= 總發行 − 庫藏股；持股 % 計算分母）
+    init_capital_reserve: 0, // 期初被投資公司資本公積
+    init_bv: 0, init_cost: 0, init_oci: 0,
+    sub_ni: 0, sub_oci: 0, sub_eq_end: 0,
+    sub_shares_end: 0,           // 期末總發行股數
+    sub_outstanding_end: 0,      // 期末流通在外股數
+    sub_capital_reserve_end: 0,  // 期末資本公積
     fair_value_end: 0,  // FVPL / FVOCI 用：年末公允價值
     impairment: 0,      // COST 用：當年認列減損
     events: [],
@@ -362,6 +369,16 @@ function migrateV3ToV4(s) {
     for (const yr of inv.years || []) {
       if (typeof yr.fair_value_end === 'undefined') yr.fair_value_end = 0;
       if (typeof yr.impairment === 'undefined') yr.impairment = 0;
+      // 兼容舊版 treasury 欄位（若有則轉為 outstanding）
+      if (typeof yr.init_outstanding === 'undefined') {
+        yr.init_outstanding = Math.max(0, (yr.init_total || 0) - (yr.init_treasury || 0));
+      }
+      if (typeof yr.sub_outstanding_end === 'undefined') {
+        yr.sub_outstanding_end = Math.max(0, (yr.sub_shares_end || 0) - (yr.sub_treasury || 0));
+      }
+      if (typeof yr.init_capital_reserve === 'undefined') yr.init_capital_reserve = 0;
+      if (typeof yr.sub_capital_reserve_end === 'undefined') yr.sub_capital_reserve_end = 0;
+      // 不再使用 treasury 欄位（保留資料但停用）
     }
   }
   return s;
@@ -491,7 +508,7 @@ function parseNum(s) {
   return isFinite(n) ? n : 0;
 }
 
-const NUMERIC_CO_KEYS = ['init_shares', 'init_total', 'init_bv', 'init_cost', 'init_oci', 'sub_ni', 'sub_oci', 'sub_eq_end', 'sub_shares_end', 'fair_value_end', 'impairment'];
+const NUMERIC_CO_KEYS = ['init_shares', 'init_total', 'init_outstanding', 'init_capital_reserve', 'init_bv', 'init_cost', 'init_oci', 'sub_ni', 'sub_oci', 'sub_eq_end', 'sub_shares_end', 'sub_outstanding_end', 'sub_capital_reserve_end', 'fair_value_end', 'impairment'];
 const NUMERIC_EV_KEYS = ['shares', 'price', 'tax', 'amount'];
 
 function parseTwDate(str) {
@@ -573,6 +590,8 @@ function computeEquity(co) {
 
   let cur = {
     shares: co.init_shares, total: co.init_total,
+    outstanding: (co.init_outstanding && co.init_outstanding > 0) ? co.init_outstanding : co.init_total,
+    capital_reserve: co.init_capital_reserve || 0,
     bv: co.init_bv, cost: co.init_cost, oci: co.init_oci,
   };
 
@@ -583,7 +602,8 @@ function computeEquity(co) {
     const days = daysBetween(segStart, segEnd);
     const event = i < cutDates.length - 2 ? validEvents[i] : null;
 
-    const holdingPct = cur.total > 0 ? cur.shares / cur.total : 0;
+    const denom = cur.outstanding > 0 ? cur.outstanding : cur.total;
+    const holdingPct = denom > 0 ? cur.shares / denom : 0;
     const segNIPortion  = co.sub_ni  * days / totDays;
     const segOCIPortion = co.sub_oci * days / totDays;
     const recogNI  = Math.round(segNIPortion  * holdingPct);
@@ -616,6 +636,7 @@ function computeEquity(co) {
   const reduces = segments.filter(s => s.event && s.event.type === '減資退現');
   const cashDivs = segments.filter(s => s.event && s.event.type === '收現金股利');
   const stockDivs = segments.filter(s => s.event && s.event.type === '盈餘轉增資');
+  const capitalRsvs = segments.filter(s => s.event && s.event.type === '資本公積轉增資');
 
   const sumImpact = (arr, key) => arr.reduce((s, x) => s + (x.evImpact[key] || 0), 0);
   const totalSaleProceeds = sumImpact(sales, 'proceeds');
@@ -634,10 +655,13 @@ function computeEquity(co) {
   const totalCashDiv = sumImpact(cashDivs, 'divAmt');
   const totalStockDivShares = sumImpact(stockDivs, 'stockShares');
   const totalStockDivAmount = sumImpact(stockDivs, 'stockDivAmount');
+  const totalCapitalRsvShares = sumImpact(capitalRsvs, 'capitalRsvShares');
+  const totalCapitalRsvAmount = sumImpact(capitalRsvs, 'capitalRsvAmount');
 
   const weightedPct = segments.reduce((s, seg) => s + seg.holdingPct * seg.days, 0) / totDays;
   const endShares = cur.shares, endBV = cur.bv, endCost = cur.cost, endOCI = cur.oci;
-  const endPct = co.sub_shares_end > 0 ? endShares / co.sub_shares_end : 0;
+  const endOutstanding = (co.sub_outstanding_end && co.sub_outstanding_end > 0) ? co.sub_outstanding_end : (co.sub_shares_end || 0);
+  const endPct = endOutstanding > 0 ? endShares / endOutstanding : 0;
   const expectedEndBV = co.sub_eq_end * endPct;
   const bvDiff = endBV - expectedEndBV;
   const bvTol = Math.max(Math.abs(expectedEndBV) * 0.01, 1000);
@@ -650,6 +674,7 @@ function computeEquity(co) {
     totalGainFin, totalGainTax,
     totalBuyAmt, totalReduceCash, totalReduceBV, totalReduceCost,
     totalCashDiv, totalStockDivShares, totalStockDivAmount,
+    totalCapitalRsvShares, totalCapitalRsvAmount,
     endShares, endBV, endCost, endOCI, endPct,
     expectedEndBV, bvDiff, bvTol,
   };
@@ -729,6 +754,34 @@ function applyEvent(ev, st, type) {
       Object.assign(impact, { stockShares: sh, stockDivAmount: sh * 10, subShareDelta: parseFloat(ev.subShareDelta) || 0 });
       break;
     }
+    case '資本公積轉增資': {
+      // 股數增加但稅務原始成本不變（每股成本稀釋）；不認列為股利收入
+      st.shares += sh;
+      st.total  += parseFloat(ev.subShareDelta) || 0;
+      // 流通在外股數同步增加（假設配股後一併流通）
+      if (st.outstanding !== undefined) st.outstanding += parseFloat(ev.subShareDelta) || 0;
+      // 被投資公司資本公積減少（按面額認列）
+      if (st.capital_reserve !== undefined) st.capital_reserve = Math.max(0, st.capital_reserve - sh * 10);
+      Object.assign(impact, { capitalRsvShares: sh, capitalRsvAmount: sh * 10, subShareDelta: parseFloat(ev.subShareDelta) || 0 });
+      break;
+    }
+    case '流通在外股數變動': {
+      // 被投資公司端的流通在外變動：買回庫藏股填負、再發行填正
+      // 使用者填的「股數」欄帶正負號 → 不取 Math.abs
+      const rawDelta = parseFloat(ev.shares) || 0;
+      if (st.outstanding !== undefined) st.outstanding = Math.max(0, st.outstanding + rawDelta);
+      // 若是註銷庫藏股，total 也減少（透過 subShareDelta 額外指定）
+      st.total += parseFloat(ev.subShareDelta) || 0;
+      Object.assign(impact, { outstandingDelta: rawDelta, totalDelta: parseFloat(ev.subShareDelta) || 0 });
+      break;
+    }
+    case '資本公積變動': {
+      // 被投資公司資本公積增減（不影響本投資公司持股）
+      const delta = parseFloat(ev.amount) || ((parseFloat(ev.shares) || 0) * (parseFloat(ev.price) || 0));
+      if (st.capital_reserve !== undefined) st.capital_reserve = (st.capital_reserve || 0) + delta;
+      Object.assign(impact, { capitalRsvDelta: delta });
+      break;
+    }
   }
   return impact;
 }
@@ -745,6 +798,8 @@ function computeFairValue(co) {
 
   let cur = {
     shares: co.init_shares, total: co.init_total,
+    outstanding: (co.init_outstanding && co.init_outstanding > 0) ? co.init_outstanding : co.init_total,
+    capital_reserve: co.init_capital_reserve || 0,
     bv: co.init_bv, cost: co.init_cost, oci: co.init_oci || 0,
     _fvoci_recycle: !!co.fvoci_recycle,
   };
@@ -779,6 +834,7 @@ function computeFairValue(co) {
   const reduces = eventImpacts.filter(x => x.event.type === '減資退現');
   const cashDivs = eventImpacts.filter(x => x.event.type === '收現金股利');
   const stockDivs = eventImpacts.filter(x => x.event.type === '盈餘轉增資');
+  const capitalRsvs = eventImpacts.filter(x => x.event.type === '資本公積轉增資');
 
   const sumImpact = (arr, key) => arr.reduce((s, x) => s + (x.impact[key] || 0), 0);
   const totalSaleProceeds = sumImpact(sales, 'proceeds');
@@ -797,12 +853,15 @@ function computeFairValue(co) {
   const totalCashDiv = sumImpact(cashDivs, 'divAmt');
   const totalStockDivShares = sumImpact(stockDivs, 'stockShares');
   const totalStockDivAmount = sumImpact(stockDivs, 'stockDivAmount');
+  const totalCapitalRsvShares = sumImpact(capitalRsvs, 'capitalRsvShares');
+  const totalCapitalRsvAmount = sumImpact(capitalRsvs, 'capitalRsvAmount');
 
   const endShares = cur.shares;
   const endBV     = cur.bv;
   const endCost   = cur.cost;
   const endOCI    = cur.oci;
-  const endPct    = co.sub_shares_end > 0 ? endShares / co.sub_shares_end : 0;
+  const endOutstanding = (co.sub_outstanding_end && co.sub_outstanding_end > 0) ? co.sub_outstanding_end : (co.sub_shares_end || 0);
+  const endPct    = endOutstanding > 0 ? endShares / endOutstanding : 0;
 
   return {
     co, totDays,
@@ -816,6 +875,7 @@ function computeFairValue(co) {
     totalGainFin, totalGainTax,
     totalBuyAmt, totalReduceCash, totalReduceBV, totalReduceCost,
     totalCashDiv, totalStockDivShares, totalStockDivAmount,
+    totalCapitalRsvShares, totalCapitalRsvAmount,
     bvBeforeReval, fvEnd, valGain, valGainPL, valGainOCI,
     endShares, endBV, endCost, endOCI, endPct,
     expectedEndBV: fvEnd, bvDiff: endBV - fvEnd,
@@ -835,6 +895,8 @@ function computeCost(co) {
 
   let cur = {
     shares: co.init_shares, total: co.init_total,
+    outstanding: (co.init_outstanding && co.init_outstanding > 0) ? co.init_outstanding : co.init_total,
+    capital_reserve: co.init_capital_reserve || 0,
     bv: co.init_bv, cost: co.init_cost, oci: 0,
   };
 
@@ -856,6 +918,7 @@ function computeCost(co) {
   const reduces = eventImpacts.filter(x => x.event.type === '減資退現');
   const cashDivs = eventImpacts.filter(x => x.event.type === '收現金股利');
   const stockDivs = eventImpacts.filter(x => x.event.type === '盈餘轉增資');
+  const capitalRsvs = eventImpacts.filter(x => x.event.type === '資本公積轉增資');
 
   const sumImpact = (arr, key) => arr.reduce((s, x) => s + (x.impact[key] || 0), 0);
   const totalSaleProceeds = sumImpact(sales, 'proceeds');
@@ -871,12 +934,15 @@ function computeCost(co) {
   const totalCashDiv = sumImpact(cashDivs, 'divAmt');
   const totalStockDivShares = sumImpact(stockDivs, 'stockShares');
   const totalStockDivAmount = sumImpact(stockDivs, 'stockDivAmount');
+  const totalCapitalRsvShares = sumImpact(capitalRsvs, 'capitalRsvShares');
+  const totalCapitalRsvAmount = sumImpact(capitalRsvs, 'capitalRsvAmount');
 
   const endShares = cur.shares;
   const endBV     = cur.bv;
   const endCost   = cur.cost;
   const endOCI    = 0;
-  const endPct    = co.sub_shares_end > 0 ? endShares / co.sub_shares_end : 0;
+  const endOutstanding = (co.sub_outstanding_end && co.sub_outstanding_end > 0) ? co.sub_outstanding_end : (co.sub_shares_end || 0);
+  const endPct    = endOutstanding > 0 ? endShares / endOutstanding : 0;
 
   return {
     co, totDays,
@@ -890,6 +956,7 @@ function computeCost(co) {
     totalGainFin, totalGainTax,
     totalBuyAmt, totalReduceCash, totalReduceBV, totalReduceCost,
     totalCashDiv, totalStockDivShares, totalStockDivAmount,
+    totalCapitalRsvShares, totalCapitalRsvAmount,
     impairment,
     endShares, endBV, endCost, endOCI, endPct,
     expectedEndBV: endCost, bvDiff: endBV - endCost,
@@ -1349,11 +1416,19 @@ function renderBasicInfo(co) {
 
       <div class="label">期初子公司總發行股數</div>
       <div class="roll-cell">${numInput(co.init_total, 'data-co="init_total"')}</div>
-      <div class="hint">商工登記公示資料 / 子公司去年期末股本 ÷ 面額</div>
+      <div class="hint">已發行股數（含庫藏股）；商工登記公示資料 / 子公司去年期末股本 ÷ 面額</div>
+
+      <div class="label">期初流通在外股數</div>
+      <div class="roll-cell">${numInput(co.init_outstanding || 0, 'data-co="init_outstanding"')}</div>
+      <div class="hint">＝ 總發行 − 庫藏股；無庫藏股可直接填等於總發行（持股 % 計算分母）</div>
+
+      <div class="label">期初被投資公司資本公積</div>
+      <div class="roll-cell">${numInput(co.init_capital_reserve || 0, 'data-co="init_capital_reserve"')}</div>
+      <div class="hint">被投資公司資本公積餘額（記錄用，影響資本公積轉增資的可分配額度）</div>
 
       <div class="label">期初持股比例</div>
-      <div class="calc">${co.init_total > 0 ? fmtPct(co.init_shares / co.init_total) : '—'}</div>
-      <div class="hint">＝ 期初持股股數 ÷ 期初子公司總股數</div>
+      <div class="calc">${(() => { const out = (co.init_outstanding && co.init_outstanding > 0) ? co.init_outstanding : co.init_total; return out > 0 ? fmtPct(co.init_shares / out) : '—'; })()}</div>
+      <div class="hint">＝ 期初持股股數 ÷ 期初流通在外股數（若空則用總發行）</div>
 
       <div class="label">${type === 'COST' ? '期初帳面值（成本）' : '期初投資帳面值（財）'}</div>
       <div class="roll-cell">${numInput(co.init_bv, 'data-co="init_bv"')}</div>
@@ -1390,11 +1465,19 @@ function renderSubInfo(co) {
 
         <div class="label">期末權益總額</div>
         <div class="input-cell">${numInput(co.sub_eq_end, 'data-co="sub_eq_end"')}</div>
-        <div class="hint">子公司期末資產負債表「權益總計」</div>
+        <div class="hint">子公司期末資產負債表「權益總計」（已含股本、資本公積、保留盈餘、其他權益）</div>
+
+        <div class="label">期末資本公積</div>
+        <div class="input-cell">${numInput(co.sub_capital_reserve_end || 0, 'data-co="sub_capital_reserve_end"')}</div>
+        <div class="hint">被投資公司期末資本公積餘額（影響資本公積轉增資的可分配額度）</div>
 
         <div class="label">期末總發行股數</div>
         <div class="input-cell">${numInput(co.sub_shares_end, 'data-co="sub_shares_end"')}</div>
-        <div class="hint">含本年度盈轉配股 / 現增 / 減資後</div>
+        <div class="hint">已發行股數（含庫藏股）；含本年度盈轉配股 / 資本公積轉增資 / 現增 / 減資後</div>
+
+        <div class="label">期末流通在外股數</div>
+        <div class="input-cell">${numInput(co.sub_outstanding_end || 0, 'data-co="sub_outstanding_end"')}</div>
+        <div class="hint">＝ 總發行 − 庫藏股；持股 % 計算分母（如無庫藏股可填等於總發行）</div>
       </div>
     </div>`;
   }
@@ -1432,7 +1515,7 @@ function renderSubInfo(co) {
 }
 
 function renderEventTable(co) {
-  const types = ['出售', '現金增資認購', '股份受讓', '股份讓與', '受贈', '減資退現', '收現金股利', '盈餘轉增資'];
+  const types = ['出售', '現金增資認購', '股份受讓', '股份讓與', '受贈', '減資退現', '收現金股利', '盈餘轉增資', '資本公積轉增資', '流通在外股數變動', '資本公積變動'];
   const headers = `
     <tr>
       <th style="width:110px">日期 (民國)</th>
@@ -1452,7 +1535,7 @@ function renderEventTable(co) {
       <td>${numInput(ev.shares || 0, `data-ev="${idx}" data-key="shares"`)}</td>
       <td>${numInput(ev.price || 0, `data-ev="${idx}" data-key="price"`)}</td>
       <td>${numInput(ev.tax || 0, `data-ev="${idx}" data-key="tax"`)}</td>
-      <td class="num ev-amt">${ev.type === '收現金股利' ? numInput(ev.amount || 0, `data-ev="${idx}" data-key="amount"`) : fmt(subtotal)}</td>
+      <td class="num ev-amt">${(ev.type === '收現金股利' || ev.type === '資本公積變動') ? numInput(ev.amount || 0, `data-ev="${idx}" data-key="amount"`) : fmt(subtotal)}</td>
       <td><input type="text" data-ev="${idx}" data-key="note" value="${ev.note || ''}" style="text-align:left"></td>
       <td style="text-align:center"><button class="del" data-evdel="${idx}">×</button></td>
     </tr>`;
@@ -1469,7 +1552,10 @@ function renderEventTable(co) {
       <strong>受贈</strong>：股數＝受贈股數；單價＝時價（會計與稅務認列基礎）<br>
       <strong>減資退現</strong>：股數＝減資股數；單價＝每股退回現金<br>
       <strong>收現金股利</strong>：直接於「金額」欄填入總現金股利金額；股數／單價可留 0<br>
-      <strong>盈餘轉增資</strong>：股數＝獲配股數；單價填面額 10；稅務原始成本將自動 +股數×10<br>
+      <strong>盈餘轉增資</strong>：股數＝獲配股數；單價填面額 10；稅務原始成本將自動 +股數×10（按面額認列為股利收入，列 58 欄）<br>
+      <strong>資本公積轉增資</strong>：股數＝獲配股數；單價填面額 10；<u>不</u>視為股利收入（不列 58 欄）；原始成本基本上不變（每股成本被稀釋）<br>
+      <strong>流通在外股數變動</strong>：被投資公司「流通在外股數」變動（如<u>買回庫藏股</u>、註銷庫藏股、再發行）；股數欄填變動量（買回填負數、再發行填正數）；本投資公司持股不變但持股% 會因分母改變而變動<br>
+      <strong>資本公積變動</strong>：被投資公司資本公積增減（如股票溢價發行、資本公積轉增資使其減少等）；金額欄填變動量（增加填正、減少填負）<br>
       <strong>股份受讓</strong>：股數＝受讓股數；單價＝每股成交價（向被投資公司其他股東或外部投資人購入；過戶費／印花稅可填稅費欄）<br>
       <strong>股份讓與</strong>：股數＝轉讓股數；單價＝每股成交價（轉讓予被投資公司其他股東或外部投資人；證交稅依規定填入稅費欄）
     </div>
@@ -1821,7 +1907,28 @@ function renderJournalEntries(r) {
       case '盈餘轉增資': {
         entries.push({ head: `③ 盈餘轉增資配股（${dateStr}）獲配 ${fmt(im.stockShares)} 股`, rows: [
           ['', '財務會計：不作分錄（僅備忘股數變動）', '', ''],
-          ['', '稅務原始成本：+ ' + fmt(im.stockDivAmount) + ' 元（按面額認列）', '', ''],
+          ['', '稅務原始成本：+ ' + fmt(im.stockDivAmount) + ' 元（按面額認列為股利收入，列 58 欄）', '', ''],
+        ]});
+        break;
+      }
+      case '資本公積轉增資': {
+        entries.push({ head: `③ 資本公積轉增資配股（${dateStr}）獲配 ${fmt(im.capitalRsvShares)} 股`, rows: [
+          ['', '財務會計：不作分錄（僅備忘股數變動）', '', ''],
+          ['', '稅務原始成本：不變（每股成本被稀釋；不認列為股利收入，<u>不</u>列 58 欄）', '', ''],
+        ]});
+        break;
+      }
+      case '流通在外股數變動': {
+        const lbl = im.outstandingDelta > 0 ? '增加' : '減少';
+        entries.push({ head: `③ 被投資公司流通在外股數${lbl}（${dateStr}）${fmtSigned(im.outstandingDelta)} 股${ev.note ? '（' + ev.note + '）' : ''}`, rows: [
+          ['', `本公司不作分錄（為被投資公司端事件）；持股 % 計算分母自此事件起改變`, '', ''],
+          ...(im.totalDelta ? [['', `總發行股數 ${im.totalDelta > 0 ? '增加' : '減少'} ${fmtSigned(im.totalDelta)}（如註銷庫藏股）`, '', '']] : []),
+        ]});
+        break;
+      }
+      case '資本公積變動': {
+        entries.push({ head: `③ 被投資公司資本公積變動（${dateStr}）${fmtSigned(im.capitalRsvDelta)} 元${ev.note ? '（' + ev.note + '）' : ''}`, rows: [
+          ['', '本公司不作分錄（為被投資公司端事件）；僅備忘子公司資本公積餘額', '', ''],
         ]});
         break;
       }
@@ -2040,6 +2147,8 @@ function renderChecks(r) {
     if (ev.type === '減資退現') return s - (im.reduceShares || 0);
     if (ev.type === '現金增資認購' || ev.type === '受贈' || ev.type === '股份受讓') return s + (im.buyShares || 0);
     if (ev.type === '盈餘轉增資') return s + (im.stockShares || 0);
+    if (ev.type === '資本公積轉增資') return s + (im.capitalRsvShares || 0);
+    // 流通在外股數變動、資本公積變動：不影響本公司持股
     return s;
   }, 0);
   const expectedEndShares = r.co.init_shares + eventShareDelta;
@@ -2168,7 +2277,7 @@ function bindMainEvents() {
       if (key === 'type') {
         renderMain();
       } else {
-        if ((key === 'shares' || key === 'price') && yr.events[idx].type !== '收現金股利') {
+        if ((key === 'shares' || key === 'price') && yr.events[idx].type !== '收現金股利' && yr.events[idx].type !== '資本公積變動') {
           const row = e.target.closest('tr');
           if (row) {
             const amtCell = row.querySelector('td.ev-amt');
