@@ -776,10 +776,18 @@ function applyEvent(ev, st, type) {
       break;
     }
     case '資本公積變動': {
-      // 被投資公司資本公積增減（不影響本投資公司持股）
+      // 被投資公司資本公積增減（不影響本公司持股股數，但對 EQUITY 法之長投帳面值會等比例變動）
       const delta = parseFloat(ev.amount) || ((parseFloat(ev.shares) || 0) * (parseFloat(ev.price) || 0));
       if (st.capital_reserve !== undefined) st.capital_reserve = (st.capital_reserve || 0) + delta;
-      Object.assign(impact, { capitalRsvDelta: delta });
+      let parentShare = 0;
+      if (type === 'EQUITY') {
+        // 採權益法投資需認列：本公司持股 × 子公司資本公積變動
+        const denom = (st.outstanding > 0) ? st.outstanding : st.total;
+        const holdingPct = denom > 0 ? st.shares / denom : 0;
+        parentShare = Math.round(delta * holdingPct);
+        st.bv += parentShare; // 直接調整長投帳面值
+      }
+      Object.assign(impact, { capitalRsvDelta: delta, parentShare });
       break;
     }
   }
@@ -1927,9 +1935,21 @@ function renderJournalEntries(r) {
         break;
       }
       case '資本公積變動': {
-        entries.push({ head: `③ 被投資公司資本公積變動（${dateStr}）${fmtSigned(im.capitalRsvDelta)} 元${ev.note ? '（' + ev.note + '）' : ''}`, rows: [
-          ['', '本公司不作分錄（為被投資公司端事件）；僅備忘子公司資本公積餘額', '', ''],
-        ]});
+        if (type === 'EQUITY' && im.parentShare && im.parentShare !== 0) {
+          const isPos = im.parentShare > 0;
+          const rsvAcct = '資本公積 — 採權益法認列之關聯企業及合資股權變動之影響';
+          entries.push({ head: `③ 被投資公司資本公積變動（${dateStr}）${fmtSigned(im.capitalRsvDelta)} 元 — 本公司應認列份額 ${fmtSigned(im.parentShare)}${ev.note ? '（' + ev.note + '）' : ''}`, rows: isPos ? [
+            ['Dr.', investAcct, im.parentShare, ''],
+            ['Cr.', rsvAcct, '', im.parentShare],
+          ] : [
+            ['Dr.', rsvAcct, Math.abs(im.parentShare), ''],
+            ['Cr.', investAcct, '', Math.abs(im.parentShare)],
+          ]});
+        } else {
+          entries.push({ head: `③ 被投資公司資本公積變動（${dateStr}）${fmtSigned(im.capitalRsvDelta)} 元${ev.note ? '（' + ev.note + '）' : ''}`, rows: [
+            ['', `${type === 'EQUITY' ? '本公司無持股或計算為 0，不需分錄' : '本公司不作分錄（' + (TYPE_META[type]||{}).short + ' 已透過公允價值/成本反映，或不適用）'}；僅備忘子公司資本公積餘額`, '', ''],
+          ]});
+        }
         break;
       }
       case '股份受讓': {
