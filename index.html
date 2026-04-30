@@ -1552,21 +1552,25 @@ function renderEventTable(co) {
   return `
   <div class="sec" id="in_events">
     <h2 class="sec-title">三、本年度股權變動 / 股利事件</h2>
-    <div class="note">
-      <strong>日期格式</strong>：可輸入 <code>113.07.01</code> / <code>113-7-1</code> / <code>113/7/1</code> / <code>113年7月1日</code> / <code>2024/7/1</code>（自動偵測民國／西元，blur 後自動補零標準化）；無法解析時會紅框警示，該事件將不納入計算。<br><br>
-      <strong>類型說明：</strong><br>
-      <strong>出售</strong>：股數＝出售股數（正數）；單價＝每股賣價；證交稅／手續費另計<br>
-      <strong>現金增資認購</strong>：股數＝認購股數；單價＝認購價；手續費（如有）填稅費欄<br>
-      <strong>受贈</strong>：股數＝受贈股數；單價＝時價（會計與稅務認列基礎）<br>
-      <strong>減資退現</strong>：股數＝減資股數；單價＝每股退回現金<br>
-      <strong>收現金股利</strong>：直接於「金額」欄填入總現金股利金額；股數／單價可留 0<br>
-      <strong>盈餘轉增資</strong>：股數＝獲配股數；單價填面額 10；稅務原始成本將自動 +股數×10（按面額認列為股利收入，列 58 欄）<br>
-      <strong>資本公積轉增資</strong>：股數＝獲配股數；單價填面額 10；<u>不</u>視為股利收入（不列 58 欄）；原始成本基本上不變（每股成本被稀釋）<br>
-      <strong>流通在外股數變動</strong>：被投資公司「流通在外股數」變動（如<u>買回庫藏股</u>、註銷庫藏股、再發行）；股數欄填變動量（買回填負數、再發行填正數）；本投資公司持股不變但持股% 會因分母改變而變動<br>
-      <strong>資本公積變動</strong>：被投資公司資本公積增減（如股票溢價發行、資本公積轉增資使其減少等）；金額欄填變動量（增加填正、減少填負）<br>
-      <strong>股份受讓</strong>：股數＝受讓股數；單價＝每股成交價（向被投資公司其他股東或外部投資人購入；過戶費／印花稅可填稅費欄）<br>
-      <strong>股份讓與</strong>：股數＝轉讓股數；單價＝每股成交價（轉讓予被投資公司其他股東或外部投資人；證交稅依規定填入稅費欄）
+    <div class="note" style="margin-bottom:6px;">
+      <strong>日期欄位</strong>：可自由輸入任何常見格式（民國 <code>113.07.01</code> / <code>113-7-1</code> / <code>113/7/1</code> / <code>113年7月1日</code> 或西元 <code>2024/7/1</code>）；離開欄位後系統會自動轉成標準格式 <code>113.07.01</code>。無法解析會紅框警示，該事件不納入計算。
     </div>
+    <details style="margin:6px 0;">
+      <summary style="cursor:pointer;font-size:13px;color:var(--c-primary);padding:4px 0;font-weight:600;">▸ 11 種事件類型說明（點擊展開）</summary>
+      <div class="note" style="margin-top:4px;">
+        <strong>出售</strong>：股數＝出售股數（正數）；單價＝每股賣價；證交稅／手續費另計<br>
+        <strong>股份受讓</strong>：股數＝受讓股數；單價＝每股成交價（向被投資公司其他股東或外部投資人購入；過戶費／印花稅可填稅費欄）<br>
+        <strong>股份讓與</strong>：股數＝轉讓股數；單價＝每股成交價（轉讓予被投資公司其他股東或外部投資人；證交稅依規定填入稅費欄）<br>
+        <strong>現金增資認購</strong>：股數＝認購股數；單價＝認購價；手續費（如有）填稅費欄<br>
+        <strong>受贈</strong>：股數＝受贈股數；單價＝時價（會計與稅務認列基礎）<br>
+        <strong>減資退現</strong>：股數＝減資股數；單價＝每股退回現金<br>
+        <strong>收現金股利</strong>：直接於「金額」欄填入總現金股利金額；股數／單價可留 0<br>
+        <strong>盈餘轉增資</strong>：股數＝獲配股數；單價填面額 10；稅務原始成本將自動 +股數×10（按面額認列為股利收入，列 58 欄）<br>
+        <strong>資本公積轉增資</strong>：股數＝獲配股數；單價填面額 10；<u>不</u>視為股利收入（不列 58 欄）；原始成本基本上不變（每股成本被稀釋）<br>
+        <strong>流通在外股數變動</strong>：被投資公司「流通在外股數」變動（如<u>買回庫藏股</u>、註銷庫藏股、再發行）；股數欄填變動量（買回填負數、再發行填正數）；本公司持股不變但持股% 會因分母改變而變動<br>
+        <strong>資本公積變動</strong>：被投資公司資本公積增減（如股票溢價發行、資本公積轉增資使其減少等）；金額欄填變動量（增加填正、減少填負）；EQUITY 類型自動產生長投帳面值調整分錄
+      </div>
+    </details>
     <table class="events">
       <thead>${headers}</thead>
       <tbody>${rows || '<tr><td colspan="8" style="text-align:center;color:#94a3b8;padding:20px">尚未新增任何事件</td></tr>'}</tbody>
