@@ -679,7 +679,7 @@ function computeEquity(co) {
     cur.oci += recogOCI;
 
     const seg = {
-      idx: i, startDate: segStart, endDate: segEnd, days, holdingPct,
+      idx: i, startDate: segStart, endDate: segEnd, days, overlapDays, holdingPct,
       shares: cur.shares, total: cur.total,
       bvStart, costStart, ociStart,
       segNIPortion, segOCIPortion, recogNI, recogOCI,
@@ -723,7 +723,9 @@ function computeEquity(co) {
   const totalCapitalRsvShares = sumImpact(capitalRsvs, 'capitalRsvShares');
   const totalCapitalRsvAmount = sumImpact(capitalRsvs, 'capitalRsvAmount');
 
-  const weightedPct = segments.reduce((s, seg) => s + seg.holdingPct * seg.days, 0) / totDays;
+  // 全年加權平均持股 %：用「運作期間」當分母（年中設立時 niDenom < totDays），
+  // 並把段天數限制在運作期間內，否則 weightedPct × NI 與 Σ(段 NI 份額 × 段持股 %) 對不起來
+  const weightedPct = segments.reduce((s, seg) => s + seg.holdingPct * seg.overlapDays, 0) / niDenom;
   const endShares = cur.shares, endBV = cur.bv, endCost = cur.cost, endOCI = cur.oci;
   const endOutstanding = (co.sub_outstanding_end && co.sub_outstanding_end > 0) ? co.sub_outstanding_end : (co.sub_shares_end || 0);
   const endPct = endOutstanding > 0 ? endShares / endOutstanding : 0;
@@ -732,7 +734,7 @@ function computeEquity(co) {
   const bvTol = Math.max(Math.abs(expectedEndBV) * 0.01, 1000);
 
   return {
-    co, totDays, weightedPct, segments,
+    co, totDays, niDenom, subOpStart, subOpEnd, weightedPct, segments,
     totalRecogNI, totalRecogOCI,
     sales, buys, reduces, cashDivs, stockDivs,
     totalSaleProceeds, totalSaleTax, totalBVRemoved, totalCostRemoved, totalOCIRemoved,
@@ -1736,8 +1738,12 @@ function renderSegments(r) {
       </tfoot>
     </table>
     <div class="small" style="margin-top:6px;">
-      認列投資收益 ＝ Σ（段 NI 份額 × 段持股 %） ＝ 子公司 NI × 全年加權持股 %（容許 ±1 元尾差）<br>
-      段 NI 份額 ＝ 子公司 NI × 段天數 ÷ 全年 ${r.totDays} 天
+      ${r.niDenom < r.totDays
+        ? `子公司於 ${fmtDate(r.subOpStart)} 起運作（運作期間 ${r.niDenom} 天，全年 ${r.totDays} 天）；NI/OCI 與加權持股 % 均以運作期間為分母，設立前段不分攤<br>
+           認列投資收益 ＝ Σ（段 NI 份額 × 段持股 %） ＝ 子公司 NI × 運作期間加權持股 %（容許 ±1 元尾差）<br>
+           段 NI 份額 ＝ 子公司 NI × (段天數 ∩ 運作期間) ÷ 運作期間 ${r.niDenom} 天`
+        : `認列投資收益 ＝ Σ（段 NI 份額 × 段持股 %） ＝ 子公司 NI × 全年加權持股 %（容許 ±1 元尾差）<br>
+           段 NI 份額 ＝ 子公司 NI × 段天數 ÷ 全年 ${r.totDays} 天`}
     </div>
   </div>`;
 }
