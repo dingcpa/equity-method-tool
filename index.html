@@ -125,6 +125,15 @@
   .view-toggle button.active { background: var(--c-primary); color: #fff; border-color: var(--c-primary); }
 
   /* 歷年表格 */
+  .tax-alloc-table { width: 100%; border-collapse: collapse; font-size: 11px; min-width: 1100px; }
+  .tax-alloc-table th, .tax-alloc-table td { border: 1px solid #e2e8f0; padding: 4px 6px; text-align: center; }
+  .tax-alloc-table thead { background: #1e293b; color: #fff; }
+  .tax-alloc-table tbody tr:nth-child(even) { background: #fafafa; }
+  .tax-alloc-table .tax-untax { background: #fef9e7; }       /* 免稅欄淡黃底 */
+  .tax-alloc-table .tax-tax { background: #ecfdf5; }         /* 應稅欄淡綠底 */
+  .tax-alloc-table thead .tax-untax { background: #b45309; } /* 免稅欄表頭 */
+  .tax-alloc-table thead .tax-tax { background: #047857; }   /* 應稅欄表頭 */
+  .tax-alloc-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
   .history-table { width: 100%; border-collapse: collapse; font-size: 12px; }
   .history-table th, .history-table td {
     border: 1px solid var(--c-border); padding: 6px 8px;
@@ -247,6 +256,12 @@
     .history-table { font-size: 9px; }
     .history-table th, .history-table td { padding: 2px 3px; word-break: break-word; }
     .segs { font-size: 10px; }
+    .tax-alloc-table { font-size: 8.5px; }
+    .tax-alloc-table th, .tax-alloc-table td { padding: 2px 3px; }
+    .tax-alloc-table input { font-size: 8.5px !important; padding: 1px 2px !important; }
+    /* radio 在列印時改顯示文字 */
+    .tax-alloc-table label input[type="radio"] { display: none; }
+    .tax-alloc-table label input[type="radio"]:not(:checked) + .pill { display: none; }
     /* 列印時隱藏列印按鈕本身（保險） */
     button { display: none !important; }
     tr, .checkrow { page-break-inside: avoid; }
@@ -292,7 +307,8 @@
 // ============================================================
 // 資料模型 v3：投資公司 → 被投資公司[] → 年度[]
 // ============================================================
-const STATE_KEY = 'equity-method-investees-v4';
+const STATE_KEY = 'equity-method-investees-v5';
+const OLD_KEY_V4 = 'equity-method-investees-v4';
 const OLD_KEY_V3 = 'equity-method-investees-v3';
 const OLD_KEY_V2 = 'equity-method-investees-v2';
 
@@ -377,7 +393,52 @@ function defaultState() {
     investees: [],
     current_investee_id: null,
     current_year: null,
-    view_mode: 'detail', // 'detail' | 'history'
+    view_mode: 'detail', // 'detail' | 'history' | 'portfolio' | 'tax_alloc'
+    tax_allocation: {},  // { [year]: { business_revenue, business_cost, expenses{...}, interest_expense } }
+  };
+}
+
+// 應免稅分攤表 — 22 個營業費用項目（401 申報書 10–32 欄）
+const EXPENSE_ITEMS = [
+  { key: 'salary',      col: 10, label: '薪資支出' },
+  { key: 'rent',        col: 11, label: '租金支出' },
+  { key: 'stationery',  col: 12, label: '文具用品' },
+  { key: 'travel',      col: 13, label: '旅費' },
+  { key: 'shipping',    col: 14, label: '運費' },
+  { key: 'postage',     col: 15, label: '郵電費' },
+  { key: 'repair',      col: 16, label: '修繕費' },
+  { key: 'ad',          col: 17, label: '廣告費' },
+  { key: 'utility',     col: 18, label: '水電瓦斯費' },
+  { key: 'insurance',   col: 19, label: '保險費' },
+  { key: 'entertain',   col: 20, label: '交際費' },
+  { key: 'donation',    col: 21, label: '捐贈' },
+  { key: 'tax',         col: 22, label: '稅捐' },
+  { key: 'baddebt',     col: 23, label: '呆帳損失' },
+  { key: 'depreciation',col: 24, label: '折舊' },
+  { key: 'amortization',col: 25, label: '各項耗竭與攤提' },
+  { key: 'export_loss', col: 26, label: '外銷損失' },
+  { key: 'meal',        col: 27, label: '伙食費' },
+  { key: 'welfare',     col: 28, label: '職工福利' },
+  { key: 'research',    col: 29, label: '研究費' },
+  { key: 'training',    col: 31, label: '訓練費' },
+  { key: 'other',       col: 32, label: '其他費用' },
+];
+
+function newExpenseRow() {
+  return { account_amount: 0, attribution: 'COMMON', over_limit: 0 };
+  // attribution: 'DIRECT' 直接歸屬 / 'COMMON' 共同分攤 / 'NONE' 不分攤
+}
+
+function newTaxAllocationYear() {
+  const expenses = {};
+  for (const it of EXPENSE_ITEMS) expenses[it.key] = newExpenseRow();
+  return {
+    business_revenue: 0,    // J 欄本業營業收入
+    business_cost: 0,       // 本業直接成本
+    direct_securities_cost: 0,  // B 欄直接成本（已計入 totalCostRemoved，本欄留作補充）
+    direct_land_cost: 0,        // C 欄直接成本
+    expenses,
+    interest_expense: 0,    // 列 10 利息支出（本版不分攤）
   };
 }
 
@@ -409,6 +470,8 @@ function newInvestee(name = '新被投資公司', startYear = 110, type = 'EQUIT
     bs_classification: bsClassification || meta.bs_default,
     fvoci_recycle: fvociRecycle,
     company_form: companyForm,  // 'STOCK' 股份有限 / 'LIMITED' 有限公司
+    dividend_source: 'DOMESTIC',     // 股利來源：DOMESTIC 國內 / FOREIGN 國外（影響 58 欄歸屬）
+    disposal_nature: 'SECURITIES',   // 處分性質：SECURITIES 證券→99 欄 / LAND 土地→101 欄 / OTHER 其他→應稅
     years: [newYear(startYear)],
   };
 }
@@ -439,6 +502,17 @@ function migrateV3ToV4(s) {
       if (typeof yr.sub_capital_reserve_end === 'undefined') yr.sub_capital_reserve_end = 0;
       // 不再使用 treasury 欄位（保留資料但停用）
     }
+  }
+  return s;
+}
+
+// v4 → v5：補 dividend_source / disposal_nature；新增 state.tax_allocation
+function migrateV4ToV5(s) {
+  if (!s) return s;
+  if (!s.tax_allocation) s.tax_allocation = {};
+  for (const inv of s.investees || []) {
+    if (!inv.dividend_source) inv.dividend_source = 'DOMESTIC';
+    if (!inv.disposal_nature) inv.disposal_nature = 'SECURITIES';
   }
   return s;
 }
@@ -475,34 +549,45 @@ function migrateV2(s) {
 }
 
 function loadState() {
-  // 1. 先試 v4
+  // 1. 先試 v5
   let raw = localStorage.getItem(STATE_KEY);
   if (raw) {
     try {
       const s = JSON.parse(raw);
       if (s.investees) {
         if (!s.view_mode) s.view_mode = 'detail';
-        return migrateV3ToV4(s); // 確保新欄位齊全
+        return migrateV4ToV5(migrateV3ToV4(s)); // 確保新欄位齊全
       }
     } catch (e) {}
   }
-  // 2. 從 v3 升 v4（保留 v3 在 localStorage 不刪，方便還原）
-  raw = localStorage.getItem(OLD_KEY_V3);
+  // 2. 從 v4 升 v5
+  raw = localStorage.getItem(OLD_KEY_V4);
   if (raw) {
     try {
-      const v3 = JSON.parse(raw);
-      const migrated = migrateV3ToV4(v3);
+      const v4 = JSON.parse(raw);
+      const migrated = migrateV4ToV5(migrateV3ToV4(v4));
       if (!migrated.view_mode) migrated.view_mode = 'detail';
       localStorage.setItem(STATE_KEY, JSON.stringify(migrated));
       return migrated;
     } catch (e) {}
   }
-  // 3. 從 v2（更早）升 v3 再升 v4
+  // 3. 從 v3 升 v4 再升 v5
+  raw = localStorage.getItem(OLD_KEY_V3);
+  if (raw) {
+    try {
+      const v3 = JSON.parse(raw);
+      const migrated = migrateV4ToV5(migrateV3ToV4(v3));
+      if (!migrated.view_mode) migrated.view_mode = 'detail';
+      localStorage.setItem(STATE_KEY, JSON.stringify(migrated));
+      return migrated;
+    } catch (e) {}
+  }
+  // 4. 從 v2 升到 v5
   raw = localStorage.getItem(OLD_KEY_V2);
   if (raw) {
     try {
       const v2 = JSON.parse(raw);
-      const migrated = migrateV3ToV4(migrateV2(v2));
+      const migrated = migrateV4ToV5(migrateV3ToV4(migrateV2(v2)));
       if (!migrated.view_mode) migrated.view_mode = 'detail';
       localStorage.setItem(STATE_KEY, JSON.stringify(migrated));
       return migrated;
@@ -1131,6 +1216,12 @@ function renderMain() {
     bindPortfolioEvents();
     return;
   }
+  if (state.view_mode === 'tax_alloc') {
+    main.innerHTML = tabs + renderTaxAllocation();
+    bindTabsEvents();
+    bindTaxAllocationEvents();
+    return;
+  }
 
   const yr = curYear();
   if (!yr) {
@@ -1190,6 +1281,7 @@ function renderYearTabs(inv) {
         <button class="${state.view_mode==='detail'?'active':''}" data-vm="detail">本年度詳情</button>
         <button class="${state.view_mode==='history'?'active':''}" data-vm="history">歷年持股變動表</button>
         <button class="${state.view_mode==='portfolio'?'active':''}" data-vm="portfolio">投資總表</button>
+        <button class="${state.view_mode==='tax_alloc'?'active':''}" data-vm="tax_alloc">應免稅分攤明細表</button>
       </div>
     </div>`;
 }
@@ -1450,6 +1542,610 @@ function bindPortfolioEvents() {
 }
 
 // ============================================================
+// 渲染 — 應免稅分攤明細表
+// ============================================================
+const TAX_COLS = [
+  { key: 'B', label: '停徵證交所得',      tax_field: '99 欄', cls: 'tax-untax' },
+  { key: 'C', label: '出售土地利益',      tax_field: '101 欄', cls: 'tax-untax' },
+  { key: 'D', label: '國內現金股利',      tax_field: '58 欄', cls: 'tax-untax' },
+  { key: 'E', label: '國外現金股利',      tax_field: '應稅', cls: 'tax-tax' },
+  { key: 'F', label: '國內股票股利',      tax_field: '58 欄', cls: 'tax-untax' },
+  { key: 'G', label: '國外股票股利',      tax_field: '應稅', cls: 'tax-tax' },
+  { key: 'H', label: '利息收入',          tax_field: '應稅', cls: 'tax-tax' },
+  { key: 'I', label: '應稅處分損益',      tax_field: '應稅', cls: 'tax-tax' },
+  { key: 'J', label: '本業營業收入',      tax_field: '應稅', cls: 'tax-tax' },
+];
+
+// 把單筆投資的稅務數字分到 9 欄 — 回傳 { B: {revenue, cost}, C: {...}, ... }
+function bucketInvestee(inv, r) {
+  const buckets = {};
+  for (const c of TAX_COLS) buckets[c.key] = { revenue: 0, cost: 0 };
+  const isDomestic = inv.dividend_source !== 'FOREIGN';
+  const disp = inv.disposal_nature || 'SECURITIES';
+  // 處分損益：依處分性質歸到 B / C / I
+  // 採 gross：列 4 收入 = 出售價款 + (類權益法) 認列投資收益、列 5 成本 = 成本除列 + 證交稅
+  const dispCol = disp === 'LAND' ? 'C' : (disp === 'OTHER' ? 'I' : 'B');
+  if (r.totalSaleProceeds || r.totalCostRemoved || r.totalSaleTax) {
+    buckets[dispCol].revenue += r.totalSaleProceeds || 0;
+    buckets[dispCol].cost += (r.totalCostRemoved || 0) + (r.totalSaleTax || 0);
+  }
+  // 股利
+  if (r.totalCashDiv) {
+    buckets[isDomestic ? 'D' : 'E'].revenue += r.totalCashDiv;
+  }
+  if (r.totalStockDivAmount) {
+    buckets[isDomestic ? 'F' : 'G'].revenue += r.totalStockDivAmount;
+  }
+  // 權益法投資收益：稅務不認，所以**不歸入任何欄**（後段在「帳外調整」剔除）
+  // FVPL 評價損益：同上
+  return buckets;
+}
+
+function renderTaxAllocation() {
+  const allYears = new Set();
+  for (const inv of state.investees) {
+    for (const y of (inv.years || [])) allYears.add(y.year);
+  }
+  const yearList = Array.from(allYears).sort((a, b) => a - b);
+  const selectedYear = state.tax_alloc_year || state.current_year || yearList[yearList.length - 1] || 113;
+  state.tax_alloc_year = selectedYear; // 寫回 state 確保 binding 能拿到正確年度
+  const yearOptions = yearList.map(y => `<option value="${y}" ${y === selectedYear ? 'selected' : ''}>${y} 年度</option>`).join('');
+
+  if (yearList.length === 0) {
+    return `
+    <div class="page-title">
+      <span class="muted">投資公司</span><span class="name">${state.investor_name || '（未設定）'}</span>
+      <span class="sep">·</span>
+      <span class="muted">應免稅分攤明細表</span>
+    </div>
+    <div class="sec"><div class="empty-state">
+      <p>尚無年度資料。請先建立被投資公司與年度。</p>
+    </div></div>`;
+  }
+
+  // tax_allocation 該年度資料（若無則建立預設）
+  if (!state.tax_allocation) state.tax_allocation = {};
+  if (!state.tax_allocation[selectedYear]) {
+    state.tax_allocation[selectedYear] = newTaxAllocationYear();
+  }
+  const ta = state.tax_allocation[selectedYear];
+
+  // 收集每筆投資該年度的 r 與 buckets
+  const items = [];
+  for (const inv of state.investees) {
+    const yr = (inv.years || []).find(y => y.year === selectedYear);
+    if (!yr) continue;
+    const co = { ...yr, name: inv.name, type: inv.type, bs_classification: inv.bs_classification, fvoci_recycle: inv.fvoci_recycle, company_form: inv.company_form };
+    const r = compute(co);
+    if (!r) continue;
+    items.push({ inv, yr, r, buckets: bucketInvestee(inv, r) });
+  }
+
+  // 加入本業（J 欄）
+  const businessBuckets = {};
+  for (const c of TAX_COLS) businessBuckets[c.key] = { revenue: 0, cost: 0 };
+  businessBuckets.J.revenue = ta.business_revenue || 0;
+  businessBuckets.J.cost = ta.business_cost || 0;
+
+  // 9 欄合計（列 4 收入、列 5 成本）
+  const total = {};
+  for (const c of TAX_COLS) total[c.key] = { revenue: 0, cost: 0 };
+  for (const it of items) {
+    for (const c of TAX_COLS) {
+      total[c.key].revenue += it.buckets[c.key].revenue;
+      total[c.key].cost += it.buckets[c.key].cost;
+    }
+  }
+  for (const c of TAX_COLS) {
+    total[c.key].revenue += businessBuckets[c.key].revenue;
+    total[c.key].cost += businessBuckets[c.key].cost;
+  }
+
+  const grandRevenue = TAX_COLS.reduce((s, c) => s + total[c.key].revenue, 0);
+  const grandCost = TAX_COLS.reduce((s, c) => s + total[c.key].cost, 0);
+  const grandRow6 = grandRevenue - grandCost;
+
+  // 列 3 分攤費用比例
+  const ratios = {};
+  for (const c of TAX_COLS) {
+    ratios[c.key] = grandRevenue > 0 ? total[c.key].revenue / grandRevenue : 0;
+  }
+
+  // === 列 7–14 計算 ===
+  // 區 C：22 項費用依歸屬分類
+  // DIRECT：直接歸屬（簡化版統一進 K8 合計欄；各欄列 8 顯示「—」）
+  // COMMON：共同分攤（依列 3 比例攤入各欄列 9，D 欄抓尾差）
+  // NONE：不分攤（申報數 = 0，全額帳外剔除）
+  // 申報數 = 帳載 − 超限剔除（NONE 例外，申報數 = 0）
+  let directExpenseTotal = 0, commonExpenseTotal = 0, noneAccountTotal = 0;
+  let totalExpenseAccount = 0, totalOverLimit = 0;
+  for (const it of EXPENSE_ITEMS) {
+    const ex = ta.expenses[it.key] || newExpenseRow();
+    const acc = ex.account_amount || 0;
+    const over = ex.over_limit || 0;
+    const declared = Math.max(0, acc - over);
+    totalExpenseAccount += acc;
+    totalOverLimit += over;
+    if (ex.attribution === 'DIRECT')      directExpenseTotal += declared;
+    else if (ex.attribution === 'COMMON') commonExpenseTotal += declared;
+    else /* NONE */                       noneAccountTotal += acc; // 全額剔除
+  }
+  const totalExpenseDeclared = directExpenseTotal + commonExpenseTotal;
+
+  // 列 9：共同分攤費用按列 3 比例攤入各欄；D 欄抓尾差
+  const row9 = {};
+  let row9SumExceptD = 0;
+  for (const c of TAX_COLS) {
+    if (c.key === 'D') continue;
+    const v = grandRevenue > 0 ? Math.round(commonExpenseTotal * ratios[c.key]) : 0;
+    row9[c.key] = v;
+    row9SumExceptD += v;
+  }
+  row9.D = commonExpenseTotal - row9SumExceptD;
+
+  // 列 8：簡化版各欄不分配，僅 K8 顯示直接歸屬合計
+  const row8 = {}; // 空物件，各欄都顯示「—」
+  // 列 7：各欄列 7 = 各欄列 9（無列 8 攤入）；K7 = K8 + K9
+  const row7 = { ...row9 };
+  const grandRow7 = directExpenseTotal + commonExpenseTotal;
+
+  // 列 10：利息支出（本版不分攤，全額放 K10）
+  const interestExpense = ta.interest_expense || 0;
+  const row10 = {}; // 各欄都 0
+  for (const c of TAX_COLS) row10[c.key] = 0;
+  const grandRow10 = interestExpense;
+
+  // 列 11：各欄全年所得額 = 列 6 − 列 7 − 列 10
+  const row11 = {};
+  for (const c of TAX_COLS) {
+    const row6 = total[c.key].revenue - total[c.key].cost;
+    row11[c.key] = row6 - row7[c.key] - (row10[c.key] || 0);
+  }
+  // K11 = 申報書 53 欄全年所得額 = K6 − K7 − K10（含直接歸屬費用扣除）
+  const grandRow11 = grandRow6 - grandRow7 - grandRow10;
+
+  // 列 12–14：申報書欄位
+  const col99  = row11.B;            // 停徵之證券、期貨交易所得（損失）
+  const col101 = row11.C;            // 免徵所得稅之出售土地利益（損失）
+  const col58  = row11.D + row11.F;  // 不計入所得額之股利金額（國內現金 + 國內股票股利）
+
+  // 課稅所得額（簡化版，未含 55 前 10 年虧損扣除等其他減項）
+  const col59 = grandRow11 - col99 - col101 - col58;
+
+  // 區 A：投資業收入分類列表
+  const bucketRows = items.map(({ inv, r, buckets }) => {
+    const meta = TYPE_META[inv.type] || TYPE_META.EQUITY;
+    const cells = TAX_COLS.map(c => {
+      const v = buckets[c.key].revenue;
+      return `<td class="num ${c.cls}">${v ? fmt(v) : '—'}</td>`;
+    }).join('');
+    const sum = TAX_COLS.reduce((s, c) => s + buckets[c.key].revenue, 0);
+    return `<tr>
+      <td><span class="pill ${meta.pill}" style="font-size:10px;">${meta.short}</span> ${inv.name}</td>
+      <td style="font-size:11px;color:#64748b;">
+        ${inv.dividend_source === 'FOREIGN' ? '國外' : '國內'} /
+        ${inv.disposal_nature === 'LAND' ? '土地' : (inv.disposal_nature === 'OTHER' ? '其他' : '證券')}
+      </td>
+      ${cells}
+      <td class="num" style="font-weight:600;">${fmt(sum)}</td>
+    </tr>`;
+  }).join('');
+
+  // 本業列
+  const businessSum = TAX_COLS.reduce((s, c) => s + businessBuckets[c.key].revenue, 0);
+  const businessRow = `<tr style="background:#f1f5f9;">
+    <td colspan="2" style="font-weight:600;">本業營業收入（手填）</td>
+    ${TAX_COLS.map(c => {
+      const v = businessBuckets[c.key].revenue;
+      return `<td class="num ${c.cls}">${v ? fmt(v) : '—'}</td>`;
+    }).join('')}
+    <td class="num" style="font-weight:600;">${fmt(businessSum)}</td>
+  </tr>`;
+
+  // 區 A 表頭
+  const aHead = `
+    <tr>
+      <th rowspan="2">被投資公司 / 收入來源</th>
+      <th rowspan="2">分類</th>
+      ${TAX_COLS.map(c => `<th class="${c.cls}">${c.key} 欄</th>`).join('')}
+      <th rowspan="2">合計</th>
+    </tr>
+    <tr>
+      ${TAX_COLS.map(c => `<th style="font-size:10px;font-weight:normal;" class="${c.cls}">${c.label}<br><span style="color:#64748b;">${c.tax_field}</span></th>`).join('')}
+    </tr>`;
+
+  const cellNum = v => `<td class="num">${v ? fmt(v) : '—'}</td>`;
+  const cellPct = v => `<td class="num">${(v * 100).toFixed(4)}%</td>`;
+
+  return `
+    <div class="page-title">
+      <span class="muted">投資公司</span><span class="name">${state.investor_name || '（未設定）'}</span>
+      <span class="sep">·</span>
+      <span class="muted">應免稅分攤明細表</span>
+      <span class="sep">·</span>
+      <select id="tax_alloc_year_sel" style="padding:4px 8px;border:1px solid var(--c-border);border-radius:3px;">${yearOptions}</select>
+    </div>
+
+    <div class="sec">
+      <h2 class="sec-title">A. 投資業收入分類（依股利來源 / 處分性質自動分到 9 欄）</h2>
+      <div style="overflow-x:auto;">
+        <table class="tax-alloc-table">
+          <thead>${aHead}</thead>
+          <tbody>${bucketRows || '<tr><td colspan="12" style="text-align:center;color:#94a3b8;padding:20px;">本年度尚無投資</td></tr>'}</tbody>
+        </table>
+      </div>
+      <div class="small" style="margin-top:6px;">
+        每筆投資依其「股利來源」「處分性質」自動分流：證券處分→ B 欄、土地處分→ C 欄、其他處分→ I 欄；國內股利→ D/F 欄（→ 58 欄）、國外股利→ E/G 欄（應稅）。
+        若分類錯誤，請至「本年度詳情」修改該投資的「股利來源」「處分性質」設定。
+      </div>
+    </div>
+
+    <div class="sec">
+      <h2 class="sec-title">B. 本業營業收入（投資公司若有銷貨／勞務收入）</h2>
+      <div class="grid">
+        <div class="label">本業營業收入</div>
+        <div class="input-cell">${numInput(ta.business_revenue, 'data-ta="business_revenue"')}</div>
+        <div class="hint">投資業以外的銷貨／勞務收入；填 0 表示純投資公司</div>
+
+        <div class="label">本業營業成本</div>
+        <div class="input-cell">${numInput(ta.business_cost, 'data-ta="business_cost"')}</div>
+        <div class="hint">本業收入直接對應之成本</div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <h2 class="sec-title">D. 應免稅分攤表（9 欄結構）</h2>
+      <div style="overflow-x:auto;">
+        <table class="tax-alloc-table">
+          <thead>${aHead}</thead>
+          <tbody>
+            <tr style="background:#fef3c7;">
+              <td colspan="2" style="font-weight:600;">列 3 分攤費用比例</td>
+              ${TAX_COLS.map(c => cellPct(ratios[c.key])).join('')}
+              <td class="num" style="font-weight:600;">100.00%</td>
+            </tr>
+            <tr>
+              <td colspan="2" style="font-weight:600;">列 4 收入</td>
+              ${TAX_COLS.map(c => cellNum(total[c.key].revenue)).join('')}
+              <td class="num" style="font-weight:600;">${fmt(grandRevenue)}</td>
+            </tr>
+            <tr>
+              <td colspan="2" style="font-weight:600;">列 5 成本</td>
+              ${TAX_COLS.map(c => cellNum(total[c.key].cost)).join('')}
+              <td class="num" style="font-weight:600;">${fmt(grandCost)}</td>
+            </tr>
+            <tr style="background:#fef3c7;">
+              <td colspan="2" style="font-weight:600;">列 6 毛利（列 4 − 列 5）</td>
+              ${TAX_COLS.map(c => cellNum(total[c.key].revenue - total[c.key].cost)).join('')}
+              <td class="num" style="font-weight:600;">${fmt(grandRow6)}</td>
+            </tr>
+            <tr>
+              <td colspan="2" style="font-weight:600;">列 7 營業費用合計（列 8 ＋ 列 9）</td>
+              ${TAX_COLS.map(c => cellNum(row7[c.key])).join('')}
+              <td class="num" style="font-weight:600;">${fmt(grandRow7)}</td>
+            </tr>
+            <tr>
+              <td colspan="2">　列 8 直接歸屬費用（簡化版不細分各欄）</td>
+              ${TAX_COLS.map(() => `<td class="num" style="color:#94a3b8;">—</td>`).join('')}
+              <td class="num">${fmt(directExpenseTotal)}</td>
+            </tr>
+            <tr>
+              <td colspan="2">　列 9 共同分攤費用（D 欄抓尾差）</td>
+              ${TAX_COLS.map(c => cellNum(row9[c.key])).join('')}
+              <td class="num">${fmt(commonExpenseTotal)}</td>
+            </tr>
+            <tr>
+              <td colspan="2" style="font-weight:600;">列 10 利息支出（本版不分攤）</td>
+              ${TAX_COLS.map(c => cellNum(row10[c.key])).join('')}
+              <td class="num" style="font-weight:600;">${fmt(grandRow10)}</td>
+            </tr>
+            <tr style="background:#dcfce7;">
+              <td colspan="2" style="font-weight:600;">列 11 全年所得額（列 6 − 列 7 − 列 10）</td>
+              ${TAX_COLS.map(c => cellNum(row11[c.key])).join('')}
+              <td class="num" style="font-weight:600;">${fmt(grandRow11)}</td>
+            </tr>
+            <tr style="background:#fef9e7;">
+              <td colspan="2" style="font-weight:600;">列 12 → 申報書 99 欄（停徵證交）</td>
+              <td class="num" style="font-weight:600;background:#fde68a;">${fmt(col99)}</td>
+              <td colspan="9" style="color:#94a3b8;">＝ B11</td>
+            </tr>
+            <tr style="background:#fef9e7;">
+              <td colspan="2" style="font-weight:600;">列 13 → 申報書 101 欄（出售土地）</td>
+              <td class="num"></td>
+              <td class="num" style="font-weight:600;background:#fde68a;">${fmt(col101)}</td>
+              <td colspan="8" style="color:#94a3b8;">＝ C11</td>
+            </tr>
+            <tr style="background:#fef9e7;">
+              <td colspan="2" style="font-weight:600;">列 14 → 申報書 58 欄（不計入所得股利）</td>
+              <td class="num"></td>
+              <td class="num"></td>
+              <td class="num" style="background:#fde68a;">${fmt(row11.D)}</td>
+              <td class="num"></td>
+              <td class="num" style="background:#fde68a;">${fmt(row11.F)}</td>
+              <td colspan="5" style="color:#94a3b8;">D11 ＋ F11 ＝ <strong>${fmt(col58)}</strong></td>
+            </tr>
+            <tr style="background:#0f172a;color:#fff;">
+              <td colspan="2" style="font-weight:600;">→ 申報書 59 欄（課稅所得額）</td>
+              <td colspan="9" style="text-align:right;">53 − 99 − 101 − 58 ＝ ${fmt(grandRow11)} − ${fmt(col99)} − ${fmt(col101)} − ${fmt(col58)} ＝</td>
+              <td class="num" style="font-weight:600;background:#fde68a;color:#0f172a;">${fmt(col59)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="small" style="margin-top:6px;line-height:1.7;">
+        <strong>分攤邏輯</strong>：列 3 = 各欄收入 ÷ 收入總額；列 9 共同費用按列 3 比例攤入各欄，D 欄用 K9 − Σ其他欄抓尾差。<br>
+        <strong>列 11 注意</strong>：各欄列 11 沒扣 K8 直接歸屬費用（簡化版不細分），所以 Σ各欄列 11 = K11 + K8；最終 99 / 101 / 58 欄取對應欄列 11，K11 才是申報書 53 欄。<br>
+        <strong>59 欄</strong>本表只示意 53 − 99 − 101 − 58；實際申報書還有 55 前 10 年虧損扣除、93 OBU、134 不動產交易等其他減項。
+      </div>
+    </div>
+
+    ${renderTaxAllocExpenseSection(ta)}
+    ${renderTaxAllocFormGuide({ ta, total, businessBuckets, ratios, row7, row9, row10, row11, grandRow6, grandRow7, grandRow10, grandRow11, directExpenseTotal, commonExpenseTotal, noneAccountTotal, totalExpenseAccount, totalOverLimit, totalExpenseDeclared, col99, col101, col58, col59, items })}
+  `;
+}
+
+// 區 C：22 項營業費用 + 利息支出
+function renderTaxAllocExpenseSection(ta) {
+  const ATTR_LABELS = {
+    DIRECT: { label: '直接歸屬', cls: 'b' },
+    COMMON: { label: '共同分攤', cls: 'g' },
+    NONE:   { label: '不分攤',   cls: 'r' },
+  };
+  let totalAcc = 0, totalOver = 0, totalDirect = 0, totalCommon = 0, totalNone = 0;
+  const rows = EXPENSE_ITEMS.map(it => {
+    const ex = ta.expenses[it.key] || newExpenseRow();
+    const acc = ex.account_amount || 0;
+    const over = ex.over_limit || 0;
+    const declared = ex.attribution === 'NONE' ? 0 : Math.max(0, acc - over);
+    totalAcc += acc;
+    totalOver += over;
+    if (ex.attribution === 'DIRECT') totalDirect += declared;
+    else if (ex.attribution === 'COMMON') totalCommon += declared;
+    else totalNone += acc;
+    const radios = ['DIRECT', 'COMMON', 'NONE'].map(v => `
+      <label style="display:inline-flex;align-items:center;gap:2px;font-size:11px;margin-right:4px;cursor:pointer;">
+        <input type="radio" name="attr_${it.key}" value="${v}" ${ex.attribution === v ? 'checked' : ''} data-tax-attr="${it.key}">
+        <span class="pill ${ATTR_LABELS[v].cls}" style="font-size:10px;padding:1px 4px;">${ATTR_LABELS[v].label}</span>
+      </label>`).join('');
+    return `<tr>
+      <td style="text-align:center;font-size:11px;color:#64748b;">${it.col}</td>
+      <td style="text-align:left;">${it.label}</td>
+      <td><input type="text" inputmode="decimal" class="numeric" value="${fmtInput(acc)}" data-tax-exp-acc="${it.key}" style="width:110px;text-align:right;"></td>
+      <td>${radios}</td>
+      <td><input type="text" inputmode="decimal" class="numeric" value="${fmtInput(over)}" data-tax-exp-over="${it.key}" style="width:90px;text-align:right;"></td>
+      <td class="num" style="background:#f1f5f9;font-weight:600;">${fmt(declared)}</td>
+    </tr>`;
+  }).join('');
+
+  return `
+    <div class="sec">
+      <h2 class="sec-title">C. 營業費用分攤（22 項，依 3 選 1 歸屬）</h2>
+      <div style="overflow-x:auto;">
+        <table class="tax-alloc-table" style="min-width:780px;">
+          <thead>
+            <tr>
+              <th style="width:50px;">申報書欄</th>
+              <th style="width:140px;">項目</th>
+              <th style="width:120px;">帳載數</th>
+              <th>歸屬</th>
+              <th style="width:100px;">超限剔除</th>
+              <th style="width:120px;">申報數</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+          <tfoot>
+            <tr style="background:#fef3c7;font-weight:600;">
+              <td colspan="2">合計</td>
+              <td class="num">${fmt(totalAcc)}</td>
+              <td style="font-size:11px;color:#64748b;text-align:left;padding-left:10px;">
+                直接 ${fmt(totalDirect)} ／ 共同 ${fmt(totalCommon)} ／ 不分攤帳載 ${fmt(totalNone)}
+              </td>
+              <td class="num">${fmt(totalOver)}</td>
+              <td class="num">${fmt(totalDirect + totalCommon)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+
+      <div class="grid" style="margin-top:14px;">
+        <div class="label">利息支出</div>
+        <div class="input-cell">${numInput(ta.interest_expense, 'data-ta="interest_expense"')}</div>
+        <div class="hint">本版列入區 D 列 10 但不依稅法 71/99 條做免稅資產比例分攤；承辦如要分攤請手動調整。</div>
+      </div>
+
+      <div class="small" style="margin-top:6px;line-height:1.7;">
+        <strong>歸屬說明</strong>：
+        <span class="pill b">直接歸屬</span> 該項費用可直接認定屬某類收入活動 → 計入 K8 直接費用合計（簡化版不細分到 B–J 哪一欄）；
+        <span class="pill g">共同分攤</span> 屬全部收入共用 → 列入 K9，依列 3 比例攤入各欄；
+        <span class="pill r">不分攤</span> 該費用稅務上不認列（如非業務支出）→ 申報數 = 0，從帳載全額剔除。<br>
+        <strong>申報數</strong> = 帳載 − 超限剔除（不分攤類為 0）；超限剔除常見：交際費（依進貨 0.15% / 銷貨 0.45%）、職工福利（0.15%）、捐贈（10/110 上限）。
+      </div>
+    </div>
+  `;
+}
+
+// 區 E：401 申報書欄位導引（帳載數 vs 申報數）
+function renderTaxAllocFormGuide(ctx) {
+  const { ta, total, businessBuckets, row7, row9, row10, row11, grandRow6, grandRow7, grandRow10, grandRow11, directExpenseTotal, commonExpenseTotal, totalExpenseAccount, totalOverLimit, totalExpenseDeclared, col99, col101, col58, col59, items } = ctx;
+
+  // 計算帳載數版本（不剔除權益法、不剔除評價損益）
+  // 業外收入：股利、利息、處分損益（淨）
+  let bookCashDiv = 0, bookStockDiv = 0;        // 股利收入（財報已認列）
+  let bookGainPL = 0;                            // 處分損益（財報面）
+  let bookEquityNI = 0;                          // 權益法投資收益（財報認列）
+  let bookValGainPL = 0;                         // FVPL 評價損益（財報認列）
+  for (const { inv, r } of items) {
+    if (inv.type !== 'EQUITY') {
+      // 非權益法：股利已入損益
+      bookCashDiv += r.totalCashDiv || 0;
+      // 股票股利稅務認列為股利但財報不入帳，所以不加
+    }
+    bookGainPL += r.totalGainFin || 0;
+    if (inv.type === 'EQUITY') bookEquityNI += r.totalRecogNI || 0;
+    if (inv.type === 'FVPL') bookValGainPL += (r.valGainPL || 0);
+  }
+
+  // 申報數版本（剔除帳外調整）
+  const declaredCashDiv = 0; // 國內現金股利全進 58 欄，國外要進應稅；簡化：申報數 = 0（由 58 欄列示）
+  const declaredEquityNI = 0; // 權益法投資收益不認，剔除
+  const declaredValGainPL = 0; // FVPL 評價損益不認，剔除
+  const declaredGainTax = items.reduce((s, x) => s + (x.r.totalGainTax || 0), 0); // 處分損益（稅務面）
+
+  // 申報書 04 營業收入淨額：本業
+  const f04_book = ta.business_revenue || 0;
+  const f04_decl = f04_book;
+  // 05 營業成本
+  const f05_book = ta.business_cost || 0;
+  const f05_decl = f05_book;
+  // 06 營業毛利
+  const f06_book = f04_book - f05_book;
+  const f06_decl = f04_decl - f05_decl;
+  // 08 營業費用
+  const f08_book = totalExpenseAccount;
+  const f08_decl = totalExpenseDeclared;
+  // 33 營業淨利
+  const f33_book = f06_book - f08_book;
+  const f33_decl = f06_decl - f08_decl;
+  // 業外收入合計（35 投資收益 + 38 利息 + 40 處分利益）
+  const nonopRev_book = bookEquityNI + bookCashDiv + bookValGainPL + Math.max(0, bookGainPL);
+  const nonopRev_decl = Math.max(0, declaredGainTax); // 簡化
+  // 業外支出（46 利息支出 + 47 投資損失 + 48 處分損失）
+  const nonopExp_book = (ta.interest_expense || 0) + Math.max(0, -bookEquityNI) + Math.max(0, -bookValGainPL) + Math.max(0, -bookGainPL);
+  const nonopExp_decl = (ta.interest_expense || 0) + Math.max(0, -declaredGainTax);
+  // 53 全年所得額
+  const f53_book = f33_book + nonopRev_book - nonopExp_book;
+  const f53_decl = grandRow11; // K11 = 申報書 53 欄申報數
+
+  const row = (col, label, book, decl, formula) => `
+    <tr>
+      <td style="text-align:center;font-weight:600;font-size:11px;background:#f1f5f9;">${col}</td>
+      <td>${label}</td>
+      <td class="num">${book === '' ? '' : fmtSigned(book)}</td>
+      <td class="num" style="background:#dcfce7;">${decl === '' ? '' : fmtSigned(decl)}</td>
+      <td style="font-size:11px;color:#64748b;text-align:left;padding-left:8px;">${formula}</td>
+    </tr>`;
+
+  return `
+    <div class="sec">
+      <h2 class="sec-title">E. 401 申報書欄位導引（帳載數 vs 自行依法調整後金額）</h2>
+      <div style="overflow-x:auto;">
+        <table class="tax-alloc-table" style="min-width:900px;">
+          <thead>
+            <tr>
+              <th style="width:60px;">申報書欄</th>
+              <th>項目</th>
+              <th style="width:140px;">帳載數</th>
+              <th style="width:140px;background:#047857;">申報數</th>
+              <th>計算公式</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${row('04', '營業收入淨額', f04_book, f04_decl, '本業營業收入；無本業則為 0')}
+            ${row('05', '營業成本', f05_book, f05_decl, '本業直接成本；無本業則為 0')}
+            ${row('06', '營業毛利（04 − 05）', f06_book, f06_decl, '')}
+            ${row('08', '營業費用合計', f08_book, f08_decl, '帳載 = 22 項合計；申報 = 帳載 − 超限剔除（不分攤類全剔）')}
+            ${row('33', '營業淨利（06 − 08）', f33_book, f33_decl, '')}
+            ${row('35', '投資收益', bookEquityNI + bookCashDiv + bookValGainPL, declaredEquityNI + declaredCashDiv + declaredValGainPL, '帳載含權益法投資收益 + 股利 + FVPL 評價；申報全剔（再由 58 欄列示）')}
+            ${row('38', '利息收入', '—', '—', '本表未追蹤利息收入事件；如有請手動填')}
+            ${row('40', '處分資產利益', Math.max(0, bookGainPL), Math.max(0, declaredGainTax), '帳載 = 財報處分損益正值；申報 = 稅務面處分損益正值（B/C/I 欄收入 − 成本）')}
+            ${row('46', '利息支出', ta.interest_expense || 0, ta.interest_expense || 0, '本版未做免稅資產比例分攤')}
+            ${row('47', '投資損失', Math.max(0, -bookEquityNI) + Math.max(0, -bookValGainPL), 0, '帳載含權益法投資損失 + FVPL 評價損失；申報全剔')}
+            ${row('48', '處分資產損失', Math.max(0, -bookGainPL), Math.max(0, -declaredGainTax), '帳載 = 財報處分損益負值；申報 = 稅務面處分損益負值')}
+            ${row('53', '全年所得額（33 + 34 − 45）', f53_book, f53_decl, '帳載 = 04 − 05 − 08 + 業外收入 − 業外支出；申報 = 區 D 列 11 K 欄')}
+            ${row('99', '停徵之證券、期貨交易所得（損失）', '', col99, '＝ 區 D B11；自 53 申報數扣除')}
+            ${row('101', '免徵所得稅之出售土地利益（損失）', '', col101, '＝ 區 D C11；自 53 申報數扣除')}
+            ${row('58', '不計入所得額之股利金額', '', col58, '＝ 區 D D11 + F11（國內現金 + 國內股票股利）；自 53 申報數扣除')}
+            ${row('59', '課稅所得額', '', col59, '＝ 53 − 99 − 101 − 58（本表未含 55 前 10 年虧損扣除等其他減項）')}
+          </tbody>
+        </table>
+      </div>
+      <div class="small" style="margin-top:6px;line-height:1.7;">
+        <strong>使用說明</strong>：左側「帳載數」對應申報書左欄（公司財報數字）；右側綠底「申報數」對應申報書右欄（自行依法調整後金額）。<br>
+        <strong>常見帳外剔除</strong>：權益法投資收益／損失（35/47 欄）、FVPL 評價損益、現金股利（轉到 58 欄）；以及處分損益財稅差（財報用財報帳面值 vs 稅務用原始成本，差額由 99/101 欄列示）。<br>
+        <strong>本版限制</strong>：38 欄利息收入、69 欄銷貨退回折讓、74 欄期末存貨等需另行處理；本表只涵蓋投資業相關 16 個欄位。
+      </div>
+    </div>
+  `;
+}
+
+function bindTaxAllocationEvents() {
+  const yrSel = document.getElementById('tax_alloc_year_sel');
+  if (yrSel) {
+    yrSel.addEventListener('change', e => {
+      state.tax_alloc_year = parseInt(e.target.value);
+      save();
+      renderMain();
+    });
+  }
+  const getTa = () => {
+    const yr = state.tax_alloc_year || state.current_year;
+    if (!state.tax_allocation) state.tax_allocation = {};
+    if (!state.tax_allocation[yr]) state.tax_allocation[yr] = newTaxAllocationYear();
+    return { yr, ta: state.tax_allocation[yr] };
+  };
+
+  // 區 B / 區 C 利息支出
+  document.querySelectorAll('input[data-ta]').forEach(el => {
+    el.addEventListener('input', e => {
+      const { ta } = getTa();
+      ta[e.target.dataset.ta] = parseNum(e.target.value);
+      save();
+    });
+    el.addEventListener('blur', e => {
+      const { ta } = getTa();
+      e.target.value = fmtInput(ta[e.target.dataset.ta]);
+      renderMain();
+    });
+  });
+
+  // 區 C：22 項費用 — 帳載數
+  document.querySelectorAll('input[data-tax-exp-acc]').forEach(el => {
+    el.addEventListener('input', e => {
+      const { ta } = getTa();
+      const k = e.target.dataset.taxExpAcc;
+      if (!ta.expenses[k]) ta.expenses[k] = newExpenseRow();
+      ta.expenses[k].account_amount = parseNum(e.target.value);
+      save();
+    });
+    el.addEventListener('blur', e => {
+      const { ta } = getTa();
+      const k = e.target.dataset.taxExpAcc;
+      e.target.value = fmtInput(ta.expenses[k].account_amount);
+      renderMain();
+    });
+  });
+
+  // 區 C：22 項費用 — 超限剔除
+  document.querySelectorAll('input[data-tax-exp-over]').forEach(el => {
+    el.addEventListener('input', e => {
+      const { ta } = getTa();
+      const k = e.target.dataset.taxExpOver;
+      if (!ta.expenses[k]) ta.expenses[k] = newExpenseRow();
+      ta.expenses[k].over_limit = parseNum(e.target.value);
+      save();
+    });
+    el.addEventListener('blur', e => {
+      const { ta } = getTa();
+      const k = e.target.dataset.taxExpOver;
+      e.target.value = fmtInput(ta.expenses[k].over_limit);
+      renderMain();
+    });
+  });
+
+  // 區 C：22 項費用 — 歸屬 radio
+  document.querySelectorAll('input[data-tax-attr]').forEach(el => {
+    el.addEventListener('change', e => {
+      const { ta } = getTa();
+      const k = e.target.dataset.taxAttr;
+      if (!ta.expenses[k]) ta.expenses[k] = newExpenseRow();
+      ta.expenses[k].attribution = e.target.value;
+      save();
+      renderMain();
+    });
+  });
+}
+
+// ============================================================
 // 渲染 — 各區塊（與單年度詳情）
 // ============================================================
 function numInput(value, attrs) {
@@ -1509,6 +2205,25 @@ function renderBasicInfo(co) {
       </div>
       <div class="hint">影響出售時的處分損益計算</div>
       ` : ''}
+
+      <div class="label">股利來源</div>
+      <div class="input-cell">
+        <select data-inv="dividend_source">
+          <option value="DOMESTIC" ${co.dividend_source !== 'FOREIGN' ? 'selected' : ''}>國內（→ 58 欄不計入所得）</option>
+          <option value="FOREIGN" ${co.dividend_source === 'FOREIGN' ? 'selected' : ''}>國外（應稅）</option>
+        </select>
+      </div>
+      <div class="hint">國內公司所發股利（含現金、股票股利）為「不計入所得額之股利」，列於申報書 58 欄；國外股利則為應稅</div>
+
+      <div class="label">處分性質</div>
+      <div class="input-cell">
+        <select data-inv="disposal_nature">
+          <option value="SECURITIES" ${co.disposal_nature !== 'LAND' && co.disposal_nature !== 'OTHER' ? 'selected' : ''}>證券／期貨（→ 99 欄停徵）</option>
+          <option value="LAND" ${co.disposal_nature === 'LAND' ? 'selected' : ''}>土地（→ 101 欄免徵）</option>
+          <option value="OTHER" ${co.disposal_nature === 'OTHER' ? 'selected' : ''}>其他（應稅）</option>
+        </select>
+      </div>
+      <div class="hint">影響處分損益歸到應免稅分攤表哪一欄；證券→ B 欄、土地→ C 欄、其他併入應稅</div>
 
       <div class="label">會計年度（民國）</div>
       <div class="input-cell">${numInput(co.year, 'data-co="year"')}</div>
@@ -2425,6 +3140,18 @@ function bindMainEvents() {
       if (NUMERIC_CO_KEYS.includes(key)) {
         e.target.value = fmtInput(yr[key]);
       }
+    });
+  });
+
+  // investee 層級欄位（dividend_source / disposal_nature 等）
+  document.querySelectorAll('select[data-inv]').forEach(el => {
+    el.addEventListener('input', e => {
+      const inv = curInvestee();
+      if (!inv) return;
+      const key = e.target.dataset.inv;
+      inv[key] = e.target.value;
+      save();
+      recomputeOutputs();
     });
   });
 
