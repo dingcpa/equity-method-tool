@@ -318,6 +318,47 @@ const TYPE_META = {
 };
 const TYPE_LIST = ['EQUITY', 'FVPL', 'FVOCI', 'COST'];
 
+// ============================================================
+// 公司形態 metadata（股份有限／有限公司）
+// ============================================================
+const COMPANY_FORM_META = {
+  STOCK: {
+    label: '股份有限公司', short: '股份',
+    face_value: 10,  // 每股面額
+    units: '股',
+    L_shares:       '持股股數',
+    L_total:        '子公司總發行股數',
+    L_outstanding:  '流通在外股數',
+    L_init_shares:      '期初持股股數',
+    L_init_total:       '期初子公司總發行股數',
+    L_init_outstanding: '期初流通在外股數',
+    L_sub_shares_end:       '期末總發行股數',
+    L_sub_outstanding_end:  '期末流通在外股數',
+    L_holding_pct:  '持股比例',
+    L_cash_increase_event: '現金增資認購（認購新股）',
+    L_event_shares: '股數 / 配股股數',
+  },
+  LIMITED: {
+    label: '有限公司', short: '有限',
+    face_value: 1,   // 出資額即金額（無「股」概念）
+    units: '元',
+    L_shares:       '出資額（元）',
+    L_total:        '子公司總資本額',
+    L_outstanding:  '流通在外出資額',
+    L_init_shares:      '期初出資額',
+    L_init_total:       '期初子公司總資本額',
+    L_init_outstanding: '期初流通在外出資額',
+    L_sub_shares_end:       '期末總資本額',
+    L_sub_outstanding_end:  '期末流通在外出資額',
+    L_holding_pct:  '出資比例',
+    L_cash_increase_event: '現金增資（增加出資額）',
+    L_event_shares: '出資額（元）',
+  },
+};
+const COMPANY_FORM_LIST = ['STOCK', 'LIMITED'];
+
+function formMeta(form) { return COMPANY_FORM_META[form || 'STOCK'] || COMPANY_FORM_META.STOCK; }
+
 function defaultState() {
   return {
     investor_name: '',
@@ -331,14 +372,14 @@ function defaultState() {
 function newYear(year) {
   return {
     year,
-    init_shares: 0,
-    init_total: 0,           // 期初被投資公司總發行股數（含庫藏股）
-    init_outstanding: 0,     // 期初流通在外股數（= 總發行 − 庫藏股；持股 % 計算分母）
+    init_shares: 0,          // 股份：股數；有限：出資額（元）
+    init_total: 0,           // 股份：總發行股數；有限：總資本額
+    init_outstanding: 0,     // 股份：流通在外股數；有限：流通在外出資額
     init_capital_reserve: 0, // 期初被投資公司資本公積
     init_bv: 0, init_cost: 0, init_oci: 0,
     sub_ni: 0, sub_oci: 0, sub_eq_end: 0,
-    sub_shares_end: 0,           // 期末總發行股數
-    sub_outstanding_end: 0,      // 期末流通在外股數
+    sub_shares_end: 0,           // 期末總發行股數 / 總資本額
+    sub_outstanding_end: 0,      // 期末流通在外股數 / 出資額
     sub_capital_reserve_end: 0,  // 期末資本公積
     fair_value_end: 0,  // FVPL / FVOCI 用：年末公允價值
     impairment: 0,      // COST 用：當年認列減損
@@ -346,7 +387,7 @@ function newYear(year) {
   };
 }
 
-function newInvestee(name = '新被投資公司', startYear = 110, type = 'EQUITY', bsClassification = null, fvociRecycle = false) {
+function newInvestee(name = '新被投資公司', startYear = 110, type = 'EQUITY', bsClassification = null, fvociRecycle = false, companyForm = 'STOCK') {
   const meta = TYPE_META[type] || TYPE_META.EQUITY;
   return {
     id: 'inv_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
@@ -354,6 +395,7 @@ function newInvestee(name = '新被投資公司', startYear = 110, type = 'EQUIT
     type,
     bs_classification: bsClassification || meta.bs_default,
     fvoci_recycle: fvociRecycle,
+    company_form: companyForm,  // 'STOCK' 股份有限 / 'LIMITED' 有限公司
     years: [newYear(startYear)],
   };
 }
@@ -366,6 +408,7 @@ function migrateV3ToV4(s) {
     const meta = TYPE_META[inv.type] || TYPE_META.EQUITY;
     if (!inv.bs_classification) inv.bs_classification = meta.bs_default;
     if (typeof inv.fvoci_recycle === 'undefined') inv.fvoci_recycle = false;
+    if (!inv.company_form) inv.company_form = 'STOCK'; // 預設股份有限公司
     for (const yr of inv.years || []) {
       if (typeof yr.fair_value_end === 'undefined') yr.fair_value_end = 0;
       if (typeof yr.impairment === 'undefined') yr.impairment = 0;
@@ -474,7 +517,7 @@ function curCompany() {
   const inv = curInvestee();
   const yr = curYear();
   if (!inv || !yr) return null;
-  return { ...yr, name: inv.name, type: inv.type, bs_classification: inv.bs_classification, fvoci_recycle: inv.fvoci_recycle };
+  return { ...yr, name: inv.name, type: inv.type, bs_classification: inv.bs_classification, fvoci_recycle: inv.fvoci_recycle, company_form: inv.company_form };
 }
 
 // ============================================================
@@ -593,6 +636,7 @@ function computeEquity(co) {
     outstanding: (co.init_outstanding && co.init_outstanding > 0) ? co.init_outstanding : co.init_total,
     capital_reserve: co.init_capital_reserve || 0,
     bv: co.init_bv, cost: co.init_cost, oci: co.init_oci,
+    _face_value: formMeta(co.company_form).face_value,
   };
 
   const segments = [];
@@ -749,20 +793,22 @@ function applyEvent(ev, st, type) {
       break;
     }
     case '盈餘轉增資': {
-      st.shares += sh; st.cost += sh * 10;
+      // 股份有限公司：sh = 配股股數，按面額（10）轉成成本
+      // 有限公司：sh = 增加出資額（元），face=1
+      const face = st._face_value || 10;
+      st.shares += sh; st.cost += sh * face;
       st.total  += parseFloat(ev.subShareDelta) || 0;
-      Object.assign(impact, { stockShares: sh, stockDivAmount: sh * 10, subShareDelta: parseFloat(ev.subShareDelta) || 0 });
+      Object.assign(impact, { stockShares: sh, stockDivAmount: sh * face, subShareDelta: parseFloat(ev.subShareDelta) || 0 });
       break;
     }
     case '資本公積轉增資': {
-      // 股數增加但稅務原始成本不變（每股成本稀釋）；不認列為股利收入
+      // 股數（出資額）增加但稅務原始成本不變（每股／每元成本稀釋）；不認列為股利收入
+      const face = st._face_value || 10;
       st.shares += sh;
       st.total  += parseFloat(ev.subShareDelta) || 0;
-      // 流通在外股數同步增加（假設配股後一併流通）
       if (st.outstanding !== undefined) st.outstanding += parseFloat(ev.subShareDelta) || 0;
-      // 被投資公司資本公積減少（按面額認列）
-      if (st.capital_reserve !== undefined) st.capital_reserve = Math.max(0, st.capital_reserve - sh * 10);
-      Object.assign(impact, { capitalRsvShares: sh, capitalRsvAmount: sh * 10, subShareDelta: parseFloat(ev.subShareDelta) || 0 });
+      if (st.capital_reserve !== undefined) st.capital_reserve = Math.max(0, st.capital_reserve - sh * face);
+      Object.assign(impact, { capitalRsvShares: sh, capitalRsvAmount: sh * face, subShareDelta: parseFloat(ev.subShareDelta) || 0 });
       break;
     }
     case '流通在外股數變動': {
@@ -810,6 +856,7 @@ function computeFairValue(co) {
     capital_reserve: co.init_capital_reserve || 0,
     bv: co.init_bv, cost: co.init_cost, oci: co.init_oci || 0,
     _fvoci_recycle: !!co.fvoci_recycle,
+    _face_value: formMeta(co.company_form).face_value,
   };
 
   // 一次性套用事件（無時間段加權，因為不認列子公司損益）
@@ -906,6 +953,7 @@ function computeCost(co) {
     outstanding: (co.init_outstanding && co.init_outstanding > 0) ? co.init_outstanding : co.init_total,
     capital_reserve: co.init_capital_reserve || 0,
     bv: co.init_bv, cost: co.init_cost, oci: 0,
+    _face_value: formMeta(co.company_form).face_value,
   };
 
   const eventImpacts = [];
@@ -1055,7 +1103,7 @@ function renderMain() {
     return;
   }
 
-  const co = { ...yr, name: inv.name, type: inv.type, bs_classification: inv.bs_classification, fvoci_recycle: inv.fvoci_recycle };
+  const co = { ...yr, name: inv.name, type: inv.type, bs_classification: inv.bs_classification, fvoci_recycle: inv.fvoci_recycle, company_form: inv.company_form };
   const r = compute(co);
   const meta = TYPE_META[inv.type] || TYPE_META.EQUITY;
 
@@ -1154,7 +1202,7 @@ function renderHistoryView(inv) {
   const sortedYears = [...inv.years].sort((a, b) => a.year - b.year);
 
   const rows = sortedYears.map(yr => {
-    const co = { ...yr, name: inv.name, type: inv.type, bs_classification: inv.bs_classification, fvoci_recycle: inv.fvoci_recycle };
+    const co = { ...yr, name: inv.name, type: inv.type, bs_classification: inv.bs_classification, fvoci_recycle: inv.fvoci_recycle, company_form: inv.company_form };
     const r = compute(co);
     const eventDesc = summarizeEvents(yr.events);
     const initPct = yr.init_total > 0 ? yr.init_shares / yr.init_total : 0;
@@ -1239,7 +1287,7 @@ function renderPortfolioView() {
   for (const inv of state.investees) {
     const yr = (inv.years || []).find(y => y.year === selectedYear);
     if (!yr) continue;
-    const co = { ...yr, name: inv.name, type: inv.type, bs_classification: inv.bs_classification, fvoci_recycle: inv.fvoci_recycle };
+    const co = { ...yr, name: inv.name, type: inv.type, bs_classification: inv.bs_classification, fvoci_recycle: inv.fvoci_recycle, company_form: inv.company_form };
     const r = compute(co);
     if (!r) continue;
     const groupKey = inv.bs_classification || (TYPE_META[inv.type] || TYPE_META.EQUITY).bs_default;
@@ -1376,6 +1424,8 @@ function numInput(value, attrs) {
 function renderBasicInfo(co) {
   const type = co.type || 'EQUITY';
   const meta = TYPE_META[type] || TYPE_META.EQUITY;
+  const fm = formMeta(co.company_form);
+  const isLimited = (co.company_form === 'LIMITED');
   const showOCI = (type === 'EQUITY' || type === 'FVOCI');
   const bvHint = type === 'EQUITY' ? '上年度底稿期末長投帳面值'
               : type === 'FVPL' ? '上年度底稿期末公允價值（拋轉自動帶入）'
@@ -1383,6 +1433,12 @@ function renderBasicInfo(co) {
               : '上年度底稿期末成本帳面值（拋轉自動帶入）';
   const ociHint = type === 'EQUITY' ? '上年度底稿期末 OCI 餘額（含正負號）'
                 : '上年度底稿期末 FVOCI 累計評價損益（含正負號）';
+  const totalHint = isLimited
+    ? '被投資公司之總資本額（元）；商工登記公示資料'
+    : '已發行股數（含庫藏股）；商工登記公示資料 / 子公司去年期末股本 ÷ 面額';
+  const outstandingHint = isLimited
+    ? '有限公司無庫藏股概念，通常等於總資本額（元）'
+    : '＝ 總發行 − 庫藏股；無庫藏股可直接填等於總發行（持股 % 計算分母）';
   return `
   <div class="sec" id="in_basic">
     <h2 class="sec-title">一、基本資料 / 期初承轉</h2>
@@ -1394,6 +1450,10 @@ function renderBasicInfo(co) {
       <div class="label">投資類型</div>
       <div class="calc"><span class="pill ${meta.pill}">${meta.short}</span> ${meta.label}</div>
       <div class="hint">建立時決定，無法事後修改（避免破壞歷年資料）</div>
+
+      <div class="label">公司形態</div>
+      <div class="calc"><span class="pill ${isLimited ? 'y' : 'b'}">${fm.short}</span> ${fm.label}</div>
+      <div class="hint">${isLimited ? '有限公司：以「出資額（元）」計量；無股票、無庫藏股' : '股份有限公司：以「股數」計量；面額 10 元'}；建立時決定</div>
 
       <div class="label">資產負債表科目</div>
       <div class="input-cell">
@@ -1418,25 +1478,25 @@ function renderBasicInfo(co) {
       <div class="input-cell">${numInput(co.year, 'data-co="year"')}</div>
       <div class="hint">可直接修改；變更後年度 tab 會自動重新排序</div>
 
-      <div class="label">期初持股股數</div>
+      <div class="label">${fm.L_init_shares}</div>
       <div class="roll-cell">${numInput(co.init_shares, 'data-co="init_shares"')}</div>
-      <div class="hint">上年度底稿期末股數（拋轉時自動帶入）</div>
+      <div class="hint">上年度底稿期末${fm.L_shares}（拋轉時自動帶入）</div>
 
-      <div class="label">期初子公司總發行股數</div>
+      <div class="label">${fm.L_init_total}</div>
       <div class="roll-cell">${numInput(co.init_total, 'data-co="init_total"')}</div>
-      <div class="hint">已發行股數（含庫藏股）；商工登記公示資料 / 子公司去年期末股本 ÷ 面額</div>
+      <div class="hint">${totalHint}</div>
 
-      <div class="label">期初流通在外股數</div>
+      <div class="label">${fm.L_init_outstanding}</div>
       <div class="roll-cell">${numInput(co.init_outstanding || 0, 'data-co="init_outstanding"')}</div>
-      <div class="hint">＝ 總發行 − 庫藏股；無庫藏股可直接填等於總發行（持股 % 計算分母）</div>
+      <div class="hint">${outstandingHint}</div>
 
       <div class="label">期初被投資公司資本公積</div>
       <div class="roll-cell">${numInput(co.init_capital_reserve || 0, 'data-co="init_capital_reserve"')}</div>
       <div class="hint">被投資公司資本公積餘額（記錄用，影響資本公積轉增資的可分配額度）</div>
 
-      <div class="label">期初持股比例</div>
+      <div class="label">期初${fm.L_holding_pct}</div>
       <div class="calc">${(() => { const out = (co.init_outstanding && co.init_outstanding > 0) ? co.init_outstanding : co.init_total; return out > 0 ? fmtPct(co.init_shares / out) : '—'; })()}</div>
-      <div class="hint">＝ 期初持股股數 ÷ 期初流通在外股數（若空則用總發行）</div>
+      <div class="hint">＝ ${fm.L_init_shares} ÷ ${fm.L_init_outstanding}（若空則用${fm.L_init_total}）</div>
 
       <div class="label">${type === 'COST' ? '期初帳面值（成本）' : '期初投資帳面值（財）'}</div>
       <div class="roll-cell">${numInput(co.init_bv, 'data-co="init_bv"')}</div>
@@ -1457,6 +1517,14 @@ function renderBasicInfo(co) {
 
 function renderSubInfo(co) {
   const type = co.type || 'EQUITY';
+  const fm = formMeta(co.company_form);
+  const isLimited = (co.company_form === 'LIMITED');
+  const totalEndHint = isLimited
+    ? '期末總資本額（元）'
+    : '已發行股數（含庫藏股）；含本年度盈轉配股 / 資本公積轉增資 / 現增 / 減資後';
+  const outstandingEndHint = isLimited
+    ? '有限公司無庫藏股，通常等於總資本額'
+    : '＝ 總發行 − 庫藏股；持股 % 計算分母（如無庫藏股可填等於總發行）';
   if (type === 'EQUITY') {
     return `
     <div class="sec" id="in_sub">
@@ -1473,63 +1541,69 @@ function renderSubInfo(co) {
 
         <div class="label">期末權益總額</div>
         <div class="input-cell">${numInput(co.sub_eq_end, 'data-co="sub_eq_end"')}</div>
-        <div class="hint">子公司期末資產負債表「權益總計」（已含股本、資本公積、保留盈餘、其他權益）</div>
+        <div class="hint">子公司期末資產負債表「權益總計」（已含${isLimited ? '出資額' : '股本'}、資本公積、保留盈餘、其他權益）</div>
 
         <div class="label">期末資本公積</div>
         <div class="input-cell">${numInput(co.sub_capital_reserve_end || 0, 'data-co="sub_capital_reserve_end"')}</div>
         <div class="hint">被投資公司期末資本公積餘額（影響資本公積轉增資的可分配額度）</div>
 
-        <div class="label">期末總發行股數</div>
+        <div class="label">${fm.L_sub_shares_end}</div>
         <div class="input-cell">${numInput(co.sub_shares_end, 'data-co="sub_shares_end"')}</div>
-        <div class="hint">已發行股數（含庫藏股）；含本年度盈轉配股 / 資本公積轉增資 / 現增 / 減資後</div>
+        <div class="hint">${totalEndHint}</div>
 
-        <div class="label">期末流通在外股數</div>
+        <div class="label">${fm.L_sub_outstanding_end}</div>
         <div class="input-cell">${numInput(co.sub_outstanding_end || 0, 'data-co="sub_outstanding_end"')}</div>
-        <div class="hint">＝ 總發行 − 庫藏股；持股 % 計算分母（如無庫藏股可填等於總發行）</div>
+        <div class="hint">${outstandingEndHint}</div>
       </div>
     </div>`;
   }
   if (type === 'FVPL' || type === 'FVOCI') {
     return `
     <div class="sec" id="in_sub">
-      <h2 class="sec-title">二、年末公允價值與被投資公司股數</h2>
-      <div class="note">公允價值來源：上市櫃股票收盤價 × 股數 / 未上市估值報告 / 第三方估值報告等。</div>
+      <h2 class="sec-title">二、年末公允價值與被投資公司${fm.L_shares}</h2>
+      <div class="note">公允價值來源：上市櫃股票收盤價 × ${fm.L_shares} / 未上市估值報告 / 第三方估值報告等。</div>
       <div class="grid">
         <div class="label">年末公允價值（總額）</div>
         <div class="input-cell">${numInput(co.fair_value_end, 'data-co="fair_value_end"')}</div>
         <div class="hint">本年 12/31 該投資的公允價值；評價損益 = 此值 − 事件處理後 BV</div>
 
-        <div class="label">期末總發行股數</div>
+        <div class="label">${fm.L_sub_shares_end}</div>
         <div class="input-cell">${numInput(co.sub_shares_end, 'data-co="sub_shares_end"')}</div>
-        <div class="hint">用於計算期末持股比例（顯示用，非必填）</div>
+        <div class="hint">用於計算期末${fm.L_holding_pct}（顯示用，非必填）</div>
       </div>
     </div>`;
   }
   // COST
   return `
   <div class="sec" id="in_sub">
-    <h2 class="sec-title">二、本期減損評估與被投資公司股數</h2>
+    <h2 class="sec-title">二、本期減損評估與被投資公司${fm.L_shares}</h2>
     <div class="note">成本法不評價，僅在有確定減損證據時認列減損。減損後不可回轉（IFRS 9）。</div>
     <div class="grid">
       <div class="label">本年度認列減損</div>
       <div class="input-cell">${numInput(co.impairment, 'data-co="impairment"')}</div>
       <div class="hint">無減損則填 0；減損會減少帳面值與原始成本</div>
 
-      <div class="label">期末總發行股數</div>
+      <div class="label">${fm.L_sub_shares_end}</div>
       <div class="input-cell">${numInput(co.sub_shares_end, 'data-co="sub_shares_end"')}</div>
-      <div class="hint">用於計算期末持股比例（顯示用，非必填）</div>
+      <div class="hint">用於計算期末${fm.L_holding_pct}（顯示用，非必填）</div>
     </div>
   </div>`;
 }
 
 function renderEventTable(co) {
-  const types = ['出售', '現金增資認購', '股份受讓', '股份讓與', '受贈', '減資退現', '收現金股利', '盈餘轉增資', '資本公積轉增資', '流通在外股數變動', '資本公積變動'];
+  const fm = formMeta(co.company_form);
+  const isLimited = (co.company_form === 'LIMITED');
+  // 有限公司無「流通在外股數變動」概念（無庫藏股）
+  const allTypes = ['出售', '現金增資認購', '股份受讓', '股份讓與', '受贈', '減資退現', '收現金股利', '盈餘轉增資', '資本公積轉增資', '流通在外股數變動', '資本公積變動'];
+  const types = isLimited ? allTypes.filter(t => t !== '流通在外股數變動') : allTypes;
+  const sharesColLabel = isLimited ? '出資額（元）' : '股數 / 配股股數';
+  const priceColLabel = isLimited ? '單價（一般填 1）' : '每股價/面額';
   const headers = `
     <tr>
       <th style="width:110px">日期 (民國)</th>
       <th style="width:120px">類型</th>
-      <th style="width:120px">股數 / 配股股數</th>
-      <th style="width:110px">每股價/面額</th>
+      <th style="width:120px">${sharesColLabel}</th>
+      <th style="width:110px">${priceColLabel}</th>
       <th style="width:110px">證交稅 / 手續費</th>
       <th style="width:130px">金額（自動）</th>
       <th style="width:120px">備註</th>
@@ -2194,7 +2268,7 @@ function recomputeOutputs() {
   const inv = curInvestee();
   const yr = curYear();
   if (!inv || !yr) return;
-  const co = { ...yr, name: inv.name, type: inv.type, bs_classification: inv.bs_classification, fvoci_recycle: inv.fvoci_recycle };
+  const co = { ...yr, name: inv.name, type: inv.type, bs_classification: inv.bs_classification, fvoci_recycle: inv.fvoci_recycle, company_form: inv.company_form };
   const r = compute(co);
   const replace = (id, html) => {
     const el = document.getElementById(id);
@@ -2383,7 +2457,16 @@ function addInvestee() {
   // 1. 輸入名稱
   const name = prompt('請輸入被投資公司名稱', '新被投資公司');
   if (name === null) return;
-  // 2. 選擇投資類型
+  // 2. 公司形態（依名稱猜測預設）
+  const guessLimited = /有限公司$/.test(String(name).trim()) && !/股份有限公司$/.test(String(name).trim());
+  const formPrompt = '請選擇公司形態（輸入數字）：\n  1. 股份有限公司 — 以「股」計量，面額 10 元\n  2. 有限公司 — 以「出資額（元）」計量，無股票概念';
+  const formInput = prompt(formPrompt, guessLimited ? '2' : '1');
+  if (formInput === null) return;
+  const formIdx = parseInt(String(formInput).trim());
+  const formMap = { 1: 'STOCK', 2: 'LIMITED' };
+  const company_form = formMap[formIdx];
+  if (!company_form) { alert('請輸入 1 或 2'); return; }
+  // 3. 選擇投資類型
   const typePrompt = '請選擇投資類型（輸入數字）：\n  1. 採權益法之投資 (EQUITY) — 對被投資公司具重大影響力\n  2. 透過損益按公允價值衡量 (FVPL) — 短期持有交易目的\n  3. 透過 OCI 按公允價值衡量 (FVOCI) — 長期持有股權／債權\n  4. 按成本衡量 (COST) — 無公開報價之未上市股票';
   const typeInput = prompt(typePrompt, '1');
   if (typeInput === null) return;
@@ -2391,13 +2474,13 @@ function addInvestee() {
   const typeMap = { 1: 'EQUITY', 2: 'FVPL', 3: 'FVOCI', 4: 'COST' };
   const type = typeMap[typeIdx];
   if (!type) { alert('請輸入 1–4'); return; }
-  // 3. 起始年度
+  // 4. 起始年度
   const yearInput = prompt(`請輸入「起始年度」（民國年）。\n從這個年度開始建立 ${name} 的持股紀錄，後續可依序拋轉至下年度。`, 110);
   if (yearInput === null) return;
   const startY = parseInt(String(yearInput).trim());
   if (!isFinite(startY) || startY < 1) { alert('請輸入有效年度'); return; }
 
-  const inv = newInvestee(name.trim() || '新被投資公司', startY, type);
+  const inv = newInvestee(name.trim() || '新被投資公司', startY, type, null, false, company_form);
   state.investees.push(inv);
   state.current_investee_id = inv.id;
   state.current_year = startY;
@@ -2478,7 +2561,7 @@ function addYear(autoYear) {
   // 從上一年（newY - 1）拋轉期末值
   const prevY = inv.years.find(y => y.year === newY - 1);
   if (prevY) {
-    const co = { ...prevY, name: inv.name, type: inv.type, bs_classification: inv.bs_classification, fvoci_recycle: inv.fvoci_recycle };
+    const co = { ...prevY, name: inv.name, type: inv.type, bs_classification: inv.bs_classification, fvoci_recycle: inv.fvoci_recycle, company_form: inv.company_form };
     const r = compute(co);
     if (r) {
       yObj.init_shares = r.endShares;
