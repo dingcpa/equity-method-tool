@@ -381,6 +381,7 @@ function newYear(year) {
     sub_shares_end: 0,           // 期末總發行股數 / 總資本額
     sub_outstanding_end: 0,      // 期末流通在外股數 / 出資額
     sub_capital_reserve_end: 0,  // 期末資本公積
+    sub_start_date: '',          // 子公司運作起始日（民國），空 = 全年運作
     fair_value_end: 0,  // FVPL / FVOCI 用：年末公允價值
     impairment: 0,      // COST 用：當年認列減損
     events: [],
@@ -409,6 +410,9 @@ function migrateV3ToV4(s) {
     if (!inv.bs_classification) inv.bs_classification = meta.bs_default;
     if (typeof inv.fvoci_recycle === 'undefined') inv.fvoci_recycle = false;
     if (!inv.company_form) inv.company_form = 'STOCK'; // 預設股份有限公司
+    for (const yr of inv.years || []) {
+      if (typeof yr.sub_start_date === 'undefined') yr.sub_start_date = '';
+    }
     for (const yr of inv.years || []) {
       if (typeof yr.fair_value_end === 'undefined') yr.fair_value_end = 0;
       if (typeof yr.impairment === 'undefined') yr.impairment = 0;
@@ -619,6 +623,14 @@ function computeEquity(co) {
   const yearLastDay = parseTwDate(`${co.year}.12.31`);
   const yearEnd = new Date(yearLastDay.getTime() + 86400000);
 
+  // 子公司運作期間：若有 sub_start_date，則從該日起算，否則從年初算
+  const subStartParsed = parseTwDate(co.sub_start_date);
+  const subOpStart = (subStartParsed && subStartParsed > yearStart && subStartParsed <= yearLastDay) ? subStartParsed : yearStart;
+  const subOpEnd = yearEnd;
+  const subOpDays = daysBetween(subOpStart, subOpEnd);
+  // NI / OCI 攤分天數：若子公司年中設立，用實際運作天數而非全年天數
+  const niDenom = (subOpDays > 0 && subOpDays < totDays) ? subOpDays : totDays;
+
   const events = [...(co.events || [])]
     .map((e, i) => ({...e, _idx: i}))
     .filter(e => parseTwDate(e.date))
@@ -648,8 +660,12 @@ function computeEquity(co) {
 
     const denom = cur.outstanding > 0 ? cur.outstanding : cur.total;
     const holdingPct = denom > 0 ? cur.shares / denom : 0;
-    const segNIPortion  = co.sub_ni  * days / totDays;
-    const segOCIPortion = co.sub_oci * days / totDays;
+    // 段內與子公司運作期間的重疊天數
+    const segOpStart = segStart < subOpStart ? subOpStart : segStart;
+    const segOpEnd   = segEnd   > subOpEnd   ? subOpEnd   : segEnd;
+    const overlapDays = Math.max(0, daysBetween(segOpStart, segOpEnd));
+    const segNIPortion  = co.sub_ni  * overlapDays / niDenom;
+    const segOCIPortion = co.sub_oci * overlapDays / niDenom;
     const recogNI  = Math.round(segNIPortion  * holdingPct);
     const recogOCI = Math.round(segOCIPortion * holdingPct);
 
@@ -1434,8 +1450,8 @@ function renderBasicInfo(co) {
   const ociHint = type === 'EQUITY' ? '上年度底稿期末 OCI 餘額（含正負號）'
                 : '上年度底稿期末 FVOCI 累計評價損益（含正負號）';
   const totalHint = isLimited
-    ? '被投資公司之總資本額（元）；商工登記公示資料'
-    : '已發行股數（含庫藏股）；商工登記公示資料 / 子公司去年期末股本 ÷ 面額';
+    ? '被投資公司之總資本額（元）；商工登記公示資料。<u>若本年新設立，填設立後總資本（不必為 0）</u>'
+    : '已發行股數（含庫藏股）；商工登記公示資料 / 子公司去年期末股本 ÷ 面額。<u>若本年新設立，填設立後總股數</u>';
   const outstandingHint = isLimited
     ? '有限公司無庫藏股概念，通常等於總資本額（元）'
     : '＝ 總發行 − 庫藏股；無庫藏股可直接填等於總發行（持股 % 計算分母）';
@@ -1531,9 +1547,13 @@ function renderSubInfo(co) {
       <h2 class="sec-title">二、被投資公司本期數字</h2>
       <div class="note">來源：被投資公司會計師查核報告之損益表 / 綜合損益表 / 資產負債表 / 盈餘分配表</div>
       <div class="grid">
+        <div class="label">子公司本年運作起始日</div>
+        <div class="input-cell"><input type="text" data-co="sub_start_date" value="${co.sub_start_date || ''}" placeholder="空白 = 全年運作；若本年新設立填如 112.11.08" style="text-align:left" class="${co.sub_start_date && !parseTwDate(co.sub_start_date) ? 'date-invalid' : ''}"></div>
+        <div class="hint">本年新設立或本年才開始運作之子公司：填運作起始日；認列損益會依運作天數攤分而非整年 ${totalDaysInYear(co.year)} 天</div>
+
         <div class="label">本期稅後淨利（NI）</div>
         <div class="input-cell">${numInput(co.sub_ni, 'data-co="sub_ni"')}</div>
-        <div class="hint">子公司損益表「本期淨利」</div>
+        <div class="hint">子公司損益表「本期淨利」（若本年中設立則為運作期間之 NI）</div>
 
         <div class="label">本期其他綜合損益（OCI）</div>
         <div class="input-cell">${numInput(co.sub_oci, 'data-co="sub_oci"')}</div>
@@ -2317,6 +2337,11 @@ function bindMainEvents() {
       if (NUMERIC_CO_KEYS.includes(key)) {
         e.target.classList.toggle('numeric-neg', v < 0);
       }
+      // sub_start_date 即時驗證
+      if (key === 'sub_start_date') {
+        const valid = !v || parseTwDate(v);
+        e.target.classList.toggle('date-invalid', !valid);
+      }
       recomputeOutputs();
     });
     el.addEventListener('blur', e => {
@@ -2324,6 +2349,22 @@ function bindMainEvents() {
       const yr = curYear();
       if (!inv || !yr) return;
       const key = e.target.dataset.co;
+
+      // sub_start_date 標準化
+      if (key === 'sub_start_date') {
+        const raw = yr.sub_start_date || '';
+        if (raw && parseTwDate(raw)) {
+          const norm = normalizeTwDate(raw);
+          if (norm !== raw) {
+            yr.sub_start_date = norm;
+            e.target.value = norm;
+            e.target.classList.remove('date-invalid');
+            save();
+            recomputeOutputs();
+          }
+        }
+        return;
+      }
 
       if (key === 'year') {
         const newY = parseNum(e.target.value);
