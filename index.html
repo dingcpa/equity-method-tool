@@ -1751,7 +1751,7 @@ function renderTaxAllocation() {
       <th rowspan="2">合計</th>
     </tr>
     <tr>
-      ${TAX_COLS.map(c => `<th style="font-size:10px;font-weight:normal;" class="${c.cls}">${c.label}<br><span style="color:#64748b;">${c.tax_field}</span></th>`).join('')}
+      ${TAX_COLS.map(c => `<th style="font-size:10px;font-weight:normal;" class="${c.cls}">${c.label}<br><span style="opacity:0.85;font-size:9px;">${c.tax_field}</span></th>`).join('')}
     </tr>`;
 
   const cellNum = v => `<td class="num">${v ? fmt(v) : '—'}</td>`;
