@@ -234,10 +234,22 @@
   .page-title .sep { color: var(--c-muted); margin: 0 6px; }
 
   @media print {
-    aside, header, .year-tabs-bar { display: none; }
+    @page { size: A4 landscape; margin: 8mm; }
+    html, body { background: #fff; }
+    aside, header, .year-tabs-bar { display: none !important; }
     .layout { display: block; }
-    main { padding: 0; max-width: 100%; }
-    .sec { box-shadow: none; border: 1px solid #ccc; }
+    main { padding: 0; max-width: 100%; width: 100%; }
+    .sec { box-shadow: none; border: 1px solid #ccc; page-break-inside: auto; }
+    /* 寬表格在列印時取消橫向卷軸並縮字級，避免被裁掉 */
+    .sec > div[style*="overflow-x:auto"],
+    .sec > div[style*="overflow-x: auto"] { overflow: visible !important; }
+    table { width: 100% !important; min-width: 0 !important; table-layout: auto; }
+    .history-table { font-size: 9px; }
+    .history-table th, .history-table td { padding: 2px 3px; word-break: break-word; }
+    .segs { font-size: 10px; }
+    /* 列印時隱藏列印按鈕本身（保險） */
+    button { display: none !important; }
+    tr, .checkrow { page-break-inside: avoid; }
   }
 </style>
 </head>
