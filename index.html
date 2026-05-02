@@ -623,8 +623,13 @@ function computeEquity(co) {
   const yearLastDay = parseTwDate(`${co.year}.12.31`);
   const yearEnd = new Date(yearLastDay.getTime() + 86400000);
 
-  // 子公司運作期間：若有 sub_start_date，則從該日起算，否則從年初算
-  const subStartParsed = parseTwDate(co.sub_start_date);
+  // 子公司運作期間：若有 sub_start_date 則從該日起算；
+  // 若無 sub_start_date 但有「設立」事件，則以該事件日期為運作起始日（子公司於該日成立才開始有 NI/OCI）
+  let subStartParsed = parseTwDate(co.sub_start_date);
+  if (!subStartParsed) {
+    const setupEv = (co.events || []).find(e => e.type === '設立' && parseTwDate(e.date));
+    if (setupEv) subStartParsed = parseTwDate(setupEv.date);
+  }
   const subOpStart = (subStartParsed && subStartParsed > yearStart && subStartParsed <= yearLastDay) ? subStartParsed : yearStart;
   const subOpEnd = yearEnd;
   const subOpDays = daysBetween(subOpStart, subOpEnd);
@@ -692,7 +697,7 @@ function computeEquity(co) {
   const totalRecogOCI = segments.reduce((s, x) => s + x.recogOCI, 0);
 
   const sales = segments.filter(s => s.event && (s.event.type === '出售' || s.event.type === '股份讓與'));
-  const buys  = segments.filter(s => s.event && (s.event.type === '現金增資認購' || s.event.type === '受贈' || s.event.type === '股份受讓'));
+  const buys  = segments.filter(s => s.event && (s.event.type === '現金增資認購' || s.event.type === '受贈' || s.event.type === '股份受讓' || s.event.type === '設立'));
   const reduces = segments.filter(s => s.event && s.event.type === '減資退現');
   const cashDivs = segments.filter(s => s.event && s.event.type === '收現金股利');
   const stockDivs = segments.filter(s => s.event && s.event.type === '盈餘轉增資');
@@ -774,6 +779,7 @@ function applyEvent(ev, st, type) {
       Object.assign(impact, { saleShares: sh, proceeds, tax, ratio, bvRemoved, costRemoved, ociRemoved, gainFin, gainTax });
       break;
     }
+    case '設立':
     case '現金增資認購':
     case '股份受讓': {
       const amount = sh * price;
@@ -901,7 +907,7 @@ function computeFairValue(co) {
 
   // 事件聚合
   const sales = eventImpacts.filter(x => x.event.type === '出售' || x.event.type === '股份讓與');
-  const buys  = eventImpacts.filter(x => ['現金增資認購', '股份受讓', '受贈'].includes(x.event.type));
+  const buys  = eventImpacts.filter(x => ['設立', '現金增資認購', '股份受讓', '受贈'].includes(x.event.type));
   const reduces = eventImpacts.filter(x => x.event.type === '減資退現');
   const cashDivs = eventImpacts.filter(x => x.event.type === '收現金股利');
   const stockDivs = eventImpacts.filter(x => x.event.type === '盈餘轉增資');
@@ -986,7 +992,7 @@ function computeCost(co) {
   }
 
   const sales = eventImpacts.filter(x => x.event.type === '出售' || x.event.type === '股份讓與');
-  const buys  = eventImpacts.filter(x => ['現金增資認購', '股份受讓', '受贈'].includes(x.event.type));
+  const buys  = eventImpacts.filter(x => ['設立', '現金增資認購', '股份受讓', '受贈'].includes(x.event.type));
   const reduces = eventImpacts.filter(x => x.event.type === '減資退現');
   const cashDivs = eventImpacts.filter(x => x.event.type === '收現金股利');
   const stockDivs = eventImpacts.filter(x => x.event.type === '盈餘轉增資');
@@ -1614,7 +1620,7 @@ function renderEventTable(co) {
   const fm = formMeta(co.company_form);
   const isLimited = (co.company_form === 'LIMITED');
   // 有限公司無「流通在外股數變動」概念（無庫藏股）
-  const allTypes = ['出售', '現金增資認購', '股份受讓', '股份讓與', '受贈', '減資退現', '收現金股利', '盈餘轉增資', '資本公積轉增資', '流通在外股數變動', '資本公積變動'];
+  const allTypes = ['設立', '出售', '現金增資認購', '股份受讓', '股份讓與', '受贈', '減資退現', '收現金股利', '盈餘轉增資', '資本公積轉增資', '流通在外股數變動', '資本公積變動'];
   const types = isLimited ? allTypes.filter(t => t !== '流通在外股數變動') : allTypes;
   const sharesColLabel = isLimited ? '出資額（元）' : '股數 / 配股股數';
   const priceColLabel = isLimited ? '單價（一般填 1）' : '每股價/面額';
@@ -1650,8 +1656,9 @@ function renderEventTable(co) {
       <strong>日期欄位</strong>：可自由輸入任何常見格式（民國 <code>113.07.01</code> / <code>113-7-1</code> / <code>113/7/1</code> / <code>113年7月1日</code> 或西元 <code>2024/7/1</code>）；離開欄位後系統會自動轉成標準格式 <code>113.07.01</code>。無法解析會紅框警示，該事件不納入計算。
     </div>
     <details style="margin:6px 0;">
-      <summary style="cursor:pointer;font-size:13px;color:var(--c-primary);padding:4px 0;font-weight:600;">▸ 11 種事件類型說明（點擊展開）</summary>
+      <summary style="cursor:pointer;font-size:13px;color:var(--c-primary);padding:4px 0;font-weight:600;">▸ 12 種事件類型說明（點擊展開）</summary>
       <div class="note" style="margin-top:4px;">
+        <strong>設立</strong>：被投資公司於本年度新成立、本公司於設立時投入出資。股數＝認購股數（有限公司填出資額）；單價＝每股認購價（有限公司填 1）；該事件日期自動視為「子公司運作起始日」，設立前的 NI/OCI 不分攤入本公司認列損益<br>
         <strong>出售</strong>：股數＝出售股數（正數）；單價＝每股賣價；證交稅／手續費另計<br>
         <strong>股份受讓</strong>：股數＝受讓股數；單價＝每股成交價（向被投資公司其他股東或外部投資人購入；過戶費／印花稅可填稅費欄）<br>
         <strong>股份讓與</strong>：股數＝轉讓股數；單價＝每股成交價（轉讓予被投資公司其他股東或外部投資人；證交稅依規定填入稅費欄）<br>
@@ -1690,7 +1697,7 @@ function renderSegments(r) {
     if (s.event) {
       const t = s.event.type;
       if (t === '出售' || t === '股份讓與') pillCls = 'r';
-      else if (t === '現金增資認購' || t === '股份受讓' || t === '受贈') pillCls = 'b';
+      else if (t === '現金增資認購' || t === '股份受讓' || t === '受贈' || t === '設立') pillCls = 'b';
       else if (t === '收現金股利') pillCls = 'g';
     }
     const evDesc = s.event ? `<span class="pill ${pillCls}">${s.event.type}</span>` : '';
@@ -1748,7 +1755,7 @@ function renderFairValueSettlement(r) {
       <table class="segs">
         <tbody>
           <tr><td>① 期初帳面值（成本）</td><td class="num">${fmt(co.init_bv)}</td></tr>
-          <tr><td>② 加：本年新購（現金增資 / 股份受讓 / 受贈）</td><td class="num">${fmt(r.totalBuyAmt)}</td></tr>
+          <tr><td>② 加：本年新購（設立 / 現金增資 / 股份受讓 / 受贈）</td><td class="num">${fmt(r.totalBuyAmt)}</td></tr>
           <tr><td>③ 加：盈轉配股（按面額 ${fmt(r.totalStockDivAmount)}）</td><td class="num">${fmt(r.totalStockDivAmount)}</td></tr>
           <tr><td>④ 減：本年出售除列（按比例）</td><td class="num">${fmtSigned(-r.totalBVRemoved)}</td></tr>
           <tr><td>⑤ 減：減資退現除列</td><td class="num">${fmtSigned(-r.totalReduceBV)}</td></tr>
@@ -1772,7 +1779,7 @@ function renderFairValueSettlement(r) {
       <table class="segs">
         <tbody>
           <tr><td>① 期初帳面值（＝期初公允價值）</td><td class="num">${fmt(co.init_bv)}</td></tr>
-          <tr><td>② 加：本年新購（現金增資 / 股份受讓 / 受贈）</td><td class="num">${fmt(r.totalBuyAmt)}</td></tr>
+          <tr><td>② 加：本年新購（設立 / 現金增資 / 股份受讓 / 受贈）</td><td class="num">${fmt(r.totalBuyAmt)}</td></tr>
           <tr><td>③ 加：盈轉配股（按面額）</td><td class="num">${fmt(r.totalStockDivAmount)}</td></tr>
           <tr><td>④ 減：本年出售除列（按比例公允值）</td><td class="num">${fmtSigned(-r.totalBVRemoved)}</td></tr>
           <tr><td>⑤ 減：減資退現除列</td><td class="num">${fmtSigned(-r.totalReduceBV)}</td></tr>
@@ -1967,6 +1974,14 @@ function renderJournalEntries(r) {
             ]});
           }
         }
+        break;
+      }
+      case '設立': {
+        entries.push({ head: `③ 設立認股（${dateStr}）認購 ${fmt(im.buyShares)} 股 @ ${fmt(ev.price)} 元（被投資公司本日成立，本公司於設立時投入出資）`, rows: [
+          ['Dr.', investAcct, im.amount, ''],
+          ['Cr.', '銀行存款', '', im.amount + (im.tax || 0)],
+          ...(im.tax ? [['Dr.', '規費 / 設立費用（如有）', im.tax, '']] : []),
+        ]});
         break;
       }
       case '現金增資認購': {
@@ -2263,7 +2278,7 @@ function renderChecks(r) {
     if (!ev) return s;
     if (ev.type === '出售' || ev.type === '股份讓與') return s - (im.saleShares || 0);
     if (ev.type === '減資退現') return s - (im.reduceShares || 0);
-    if (ev.type === '現金增資認購' || ev.type === '受贈' || ev.type === '股份受讓') return s + (im.buyShares || 0);
+    if (ev.type === '現金增資認購' || ev.type === '受贈' || ev.type === '股份受讓' || ev.type === '設立') return s + (im.buyShares || 0);
     if (ev.type === '盈餘轉增資') return s + (im.stockShares || 0);
     if (ev.type === '資本公積轉增資') return s + (im.capitalRsvShares || 0);
     // 流通在外股數變動、資本公積變動：不影響本公司持股
