@@ -826,6 +826,35 @@ function computeEquity(co) {
   const endShares = cur.shares, endBV = cur.bv, endCost = cur.cost, endOCI = cur.oci;
   const endOutstanding = (co.sub_outstanding_end && co.sub_outstanding_end > 0) ? co.sub_outstanding_end : (co.sub_shares_end || 0);
   const endPct = endOutstanding > 0 ? endShares / endOutstanding : 0;
+  const initOutstanding = (co.init_outstanding && co.init_outstanding > 0) ? co.init_outstanding : (co.init_total || 0);
+  const initPct = initOutstanding > 0 ? co.init_shares / initOutstanding : 0;
+
+  // 期末權益×期末%：僅在「投資人全年持股 % 不變、且期初 BV 已等於期初權益份額」時，
+  // 才能直接拿來勾稽。年中新購 / 處分 / 持股 % 變動會破壞此假設，
+  // 因為取得日已存在的保留盈餘屬於原股東，不歸投資人享有。
+  const acquisitionTypes = new Set(['設立', '現金增資認購', '股份受讓', '受贈']);
+  const dispositionTypes = new Set(['出售', '股份讓與', '減資退現']);
+  const hasAcquisitionEv = segments.some(s => s.event && acquisitionTypes.has(s.event.type));
+  const hasDispositionEv = segments.some(s => s.event && dispositionTypes.has(s.event.type));
+  const pctChanged = Math.abs(initPct - endPct) > 0.0001;
+  const isMidYearChange = hasAcquisitionEv || hasDispositionEv || pctChanged;
+
+  // 滾動公式（恆等式）：期初 BV ＋ 認列 NI/OCI ＋ 新購淨額 ＋ 公積變動認列
+  //                  − 出售除列 BV − 減資除列 BV − 收現金股利 ＝ 期末 BV
+  // 用於年度中有股權變動時的主勾稽（與 endBV 比對應為 0 元）
+  const totalBuyTax = sumImpact(buys, 'tax');
+  const totalCapitalRsvParentShare = segments.reduce(
+    (s, x) => s + ((x.event && x.event.type === '資本公積變動' && x.evImpact) ? (x.evImpact.parentShare || 0) : 0),
+    0,
+  );
+  const rollForwardEndBV = co.init_bv
+    + totalRecogNI + totalRecogOCI
+    + (totalBuyAmt - totalBuyTax)
+    + totalCapitalRsvParentShare
+    - totalBVRemoved - totalReduceBV - totalCashDiv;
+  const rollForwardDiff = endBV - rollForwardEndBV;
+
+  // 簡式檢查：期末權益×期末%（僅在無年度中股權變動時直接勾稽）
   const expectedEndBV = co.sub_eq_end * endPct;
   const bvDiff = endBV - expectedEndBV;
   const bvTol = Math.max(Math.abs(expectedEndBV) * 0.01, 1000);
@@ -836,11 +865,13 @@ function computeEquity(co) {
     sales, buys, reduces, cashDivs, stockDivs,
     totalSaleProceeds, totalSaleTax, totalBVRemoved, totalCostRemoved, totalOCIRemoved,
     totalGainFin, totalGainTax,
-    totalBuyAmt, totalReduceCash, totalReduceBV, totalReduceCost,
+    totalBuyAmt, totalBuyTax, totalReduceCash, totalReduceBV, totalReduceCost,
     totalCashDiv, totalStockDivShares, totalStockDivAmount,
-    totalCapitalRsvShares, totalCapitalRsvAmount,
-    endShares, endBV, endCost, endOCI, endPct,
+    totalCapitalRsvShares, totalCapitalRsvAmount, totalCapitalRsvParentShare,
+    endShares, endBV, endCost, endOCI, endPct, initPct,
     expectedEndBV, bvDiff, bvTol,
+    rollForwardEndBV, rollForwardDiff,
+    hasAcquisitionEv, hasDispositionEv, pctChanged, isMidYearChange,
   };
 }
 
@@ -2994,10 +3025,40 @@ function renderChecks(r) {
       ok: Math.abs(niDiff) <= Math.max(Math.abs(expectedNI) * 0.001, 10),
       msg: `<strong>① 認列投資收益勾稽</strong>：時間段加總 ${fmt(r.totalRecogNI)}　vs.　NI ${fmt(r.co.sub_ni)} × 加權 ${fmtPct(r.weightedPct)} ＝ ${fmt(expectedNI)}　差額 ${fmtSigned(niDiff)}`
     });
-    checks.push({
-      ok: Math.abs(r.bvDiff) < r.bvTol,
-      msg: `<strong>② 期末帳面值勾稽</strong>：${fmt(r.endBV)}　vs.　${fmt(r.co.sub_eq_end)} × ${fmtPct(r.endPct)} ＝ ${fmt(r.expectedEndBV)}　差額 ${fmtSigned(r.bvDiff)}`
-    });
+
+    if (r.isMidYearChange) {
+      // 年度中有股權取得 / 處分 / 持股 % 變動：簡式「期末權益×期末%」不適用，
+      // 因取得日前已存在的保留盈餘 / 資本公積屬於原股東，不歸投資人享有。
+      // 改用「滾動公式」做主勾稽。
+      const rfBuyNet = r.totalBuyAmt - r.totalBuyTax;
+      const rfParts = [
+        `期初 BV ${fmt(r.co.init_bv)}`,
+        `${r.totalRecogNI >= 0 ? '＋' : '−'} 認列損益 ${fmt(Math.abs(r.totalRecogNI))}`,
+        `${r.totalRecogOCI >= 0 ? '＋' : '−'} 認列 OCI ${fmt(Math.abs(r.totalRecogOCI))}`,
+        `＋ 新購（淨額）${fmt(rfBuyNet)}`,
+        `− 出售除列 ${fmt(r.totalBVRemoved)}`,
+        `− 減資除列 ${fmt(r.totalReduceBV)}`,
+        `− 收現金股利 ${fmt(r.totalCashDiv)}`,
+      ];
+      if (Math.abs(r.totalCapitalRsvParentShare) > 0) {
+        rfParts.push(`${r.totalCapitalRsvParentShare >= 0 ? '＋' : '−'} 認列資本公積變動 ${fmt(Math.abs(r.totalCapitalRsvParentShare))}`);
+      }
+      checks.push({
+        ok: Math.abs(r.rollForwardDiff) < 2,
+        msg: `<strong>② 期末帳面值勾稽（滾動公式）</strong>：${rfParts.join('　')} ＝ ${fmt(r.rollForwardEndBV)}　vs. 期末 BV ${fmt(r.endBV)}　差額 ${fmtSigned(r.rollForwardDiff)}`
+      });
+
+      const simpleDiff = r.endBV - r.expectedEndBV;
+      checks.push({
+        ok: true,
+        msg: `<strong>※ 期末權益×期末% 不適用（年度中持股變動）</strong>：${fmt(r.co.sub_eq_end)} × ${fmtPct(r.endPct)} ＝ ${fmt(r.expectedEndBV)}（資訊性，非勾稽）。差額 ${fmtSigned(simpleDiff)} 主要為投資取得日前被投資公司既存之保留盈餘 / 資本公積（屬原股東），採權益法不歸投資人享有，故不調整入帳。`
+      });
+    } else {
+      checks.push({
+        ok: Math.abs(r.bvDiff) < r.bvTol,
+        msg: `<strong>② 期末帳面值勾稽</strong>：${fmt(r.endBV)}　vs.　${fmt(r.co.sub_eq_end)} × ${fmtPct(r.endPct)} ＝ ${fmt(r.expectedEndBV)}　差額 ${fmtSigned(r.bvDiff)}`
+      });
+    }
   } else if (type === 'FVPL' || type === 'FVOCI') {
     checks.push({
       ok: Math.abs(r.endBV - r.fvEnd) < 1,
