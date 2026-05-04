@@ -1553,7 +1553,7 @@ const TAX_COLS = [
   { key: 'G', label: '國外股票股利',      tax_field: '應稅', cls: 'tax-tax' },
   { key: 'H', label: '利息收入',          tax_field: '應稅', cls: 'tax-tax' },
   { key: 'I', label: '應稅處分損益',      tax_field: '應稅', cls: 'tax-tax' },
-  { key: 'J', label: '本業營業收入',      tax_field: '應稅', cls: 'tax-tax' },
+  { key: 'J', label: '其他營業收入',      tax_field: '應稅', cls: 'tax-tax' },
 ];
 
 // 把單筆投資的稅務數字分到 9 欄 — 回傳 { B: {revenue, cost}, C: {...}, ... }
@@ -1731,10 +1731,10 @@ function renderTaxAllocation() {
     </tr>`;
   }).join('');
 
-  // 本業列
+  // 本業列（其他應稅營業收入）
   const businessSum = TAX_COLS.reduce((s, c) => s + businessBuckets[c.key].revenue, 0);
   const businessRow = `<tr style="background:#f1f5f9;">
-    <td colspan="2" style="font-weight:600;">本業營業收入（手填）</td>
+    <td colspan="2" style="font-weight:600;">其他應稅營業收入（手填）</td>
     ${TAX_COLS.map(c => {
       const v = businessBuckets[c.key].revenue;
       return `<td class="num ${c.cls}">${v ? fmt(v) : '—'}</td>`;
@@ -1781,15 +1781,15 @@ function renderTaxAllocation() {
     </div>
 
     <div class="sec">
-      <h2 class="sec-title">B. 本業營業收入（投資公司若有銷貨／勞務收入）</h2>
+      <h2 class="sec-title">B. 其他應稅營業收入（投資公司若有銷貨／勞務收入）</h2>
       <div class="grid">
-        <div class="label">本業營業收入</div>
+        <div class="label">其他應稅營業收入</div>
         <div class="input-cell">${numInput(ta.business_revenue, 'data-ta="business_revenue"')}</div>
-        <div class="hint">投資業以外的銷貨／勞務收入；填 0 表示純投資公司</div>
+        <div class="hint">投資業以外的銷貨／勞務收入（投資業營業收入即股利等已自動帶入區 A）；純投資公司填 0</div>
 
-        <div class="label">本業營業成本</div>
+        <div class="label">其他應稅營業成本</div>
         <div class="input-cell">${numInput(ta.business_cost, 'data-ta="business_cost"')}</div>
-        <div class="hint">本業收入直接對應之成本</div>
+        <div class="hint">其他應稅營業收入直接對應之成本</div>
       </div>
     </div>
 
@@ -1985,15 +1985,16 @@ function renderTaxAllocFormGuide(ctx) {
     if (inv.type === 'FVPL') bookValGainPL += (r.valGainPL || 0);
   }
 
-  // 申報數版本（剔除帳外調整）
-  const declaredCashDiv = 0; // 國內現金股利全進 58 欄，國外要進應稅；簡化：申報數 = 0（由 58 欄列示）
-  const declaredEquityNI = 0; // 權益法投資收益不認，剔除
-  const declaredValGainPL = 0; // FVPL 評價損益不認，剔除
-  const declaredGainTax = items.reduce((s, x) => s + (x.r.totalGainTax || 0), 0); // 處分損益（稅務面）
+  // 處分淨額（B + C + I 欄列 6 = 收入 − 成本）— 申報數使用
+  const dispNetDecl = (total.B.revenue + total.C.revenue + total.I.revenue)
+                    - (total.B.cost + total.C.cost + total.I.cost);
 
-  // 申報書 04 營業收入淨額：本業
-  const f04_book = ta.business_revenue || 0;
-  const f04_decl = f04_book;
+  // === 投資公司會計政策：股利為營業收入（04 欄），處分損益為業外（40/48 欄） ===
+  // 04 營業收入淨額
+  // 帳載：其他應稅營業收入 + 已認列股利收入（FVPL/FVOCI/COST）+ 權益法投資收益 + FVPL 評價
+  const f04_book = (ta.business_revenue || 0) + bookCashDiv + bookStockDiv + bookEquityNI + bookValGainPL;
+  // 申報：D + E + F + G 股利欄 + J 其他應稅營業收入欄（不含 H 利息、不含 B/C/I 處分）
+  const f04_decl = total.D.revenue + total.E.revenue + total.F.revenue + total.G.revenue + total.J.revenue;
   // 05 營業成本
   const f05_book = ta.business_cost || 0;
   const f05_decl = f05_book;
@@ -2006,15 +2007,25 @@ function renderTaxAllocFormGuide(ctx) {
   // 33 營業淨利
   const f33_book = f06_book - f08_book;
   const f33_decl = f06_decl - f08_decl;
-  // 業外收入合計（35 投資收益 + 38 利息 + 40 處分利益）
-  const nonopRev_book = bookEquityNI + bookCashDiv + bookValGainPL + Math.max(0, bookGainPL);
-  const nonopRev_decl = Math.max(0, declaredGainTax); // 簡化
-  // 業外支出（46 利息支出 + 47 投資損失 + 48 處分損失）
-  const nonopExp_book = (ta.interest_expense || 0) + Math.max(0, -bookEquityNI) + Math.max(0, -bookValGainPL) + Math.max(0, -bookGainPL);
-  const nonopExp_decl = (ta.interest_expense || 0) + Math.max(0, -declaredGainTax);
-  // 53 全年所得額
-  const f53_book = f33_book + nonopRev_book - nonopExp_book;
-  const f53_decl = grandRow11; // K11 = 申報書 53 欄申報數
+  // 35 投資收益：股利 / 權益法 / FVPL 評價已併入 04，本欄為 0
+  const f35_book = 0, f35_decl = 0;
+  // 38 利息收入
+  const f38_book = 0; // 本表未追蹤
+  const f38_decl = total.H.revenue;
+  // 40 處分資產利益
+  const f40_book = Math.max(0, bookGainPL);
+  const f40_decl = Math.max(0, dispNetDecl);
+  // 46 利息支出
+  const f46_book = ta.interest_expense || 0;
+  const f46_decl = ta.interest_expense || 0;
+  // 47 投資損失：併入 04 帳載（負值），本欄為 0
+  const f47_book = 0, f47_decl = 0;
+  // 48 處分資產損失
+  const f48_book = Math.max(0, -bookGainPL);
+  const f48_decl = Math.max(0, -dispNetDecl);
+  // 53 全年所得額 = 33 + 業外收入 − 業外支出
+  const f53_book = f33_book + f35_book + f38_book + f40_book - f46_book - f47_book - f48_book;
+  const f53_decl = grandRow11; // 應等於 33+38+40−46−48 對得起來
 
   const row = (col, label, book, decl, formula) => `
     <tr>
@@ -2040,18 +2051,18 @@ function renderTaxAllocFormGuide(ctx) {
             </tr>
           </thead>
           <tbody>
-            ${row('04', '營業收入淨額', f04_book, f04_decl, '本業營業收入；無本業則為 0')}
-            ${row('05', '營業成本', f05_book, f05_decl, '本業直接成本；無本業則為 0')}
+            ${row('04', '營業收入淨額', f04_book, f04_decl, '帳載 = 其他應稅營收 + 股利 + 權益法 + FVPL 評價；申報 = 區 D 之 D + E + F + G + J 欄收入合計（投資公司之股利＋其他應稅營收）')}
+            ${row('05', '營業成本', f05_book, f05_decl, '其他應稅直接成本；無則為 0')}
             ${row('06', '營業毛利（04 − 05）', f06_book, f06_decl, '')}
             ${row('08', '營業費用合計', f08_book, f08_decl, '帳載 = 22 項合計；申報 = 帳載 − 超限剔除（不分攤類全剔）')}
             ${row('33', '營業淨利（06 − 08）', f33_book, f33_decl, '')}
-            ${row('35', '投資收益', bookEquityNI + bookCashDiv + bookValGainPL, declaredEquityNI + declaredCashDiv + declaredValGainPL, '帳載含權益法投資收益 + 股利 + FVPL 評價；申報全剔（再由 58 欄列示）')}
-            ${row('38', '利息收入', '—', '—', '本表未追蹤利息收入事件；如有請手動填')}
-            ${row('40', '處分資產利益', Math.max(0, bookGainPL), Math.max(0, declaredGainTax), '帳載 = 財報處分損益正值；申報 = 稅務面處分損益正值（B/C/I 欄收入 − 成本）')}
-            ${row('46', '利息支出', ta.interest_expense || 0, ta.interest_expense || 0, '本版未做免稅資產比例分攤')}
-            ${row('47', '投資損失', Math.max(0, -bookEquityNI) + Math.max(0, -bookValGainPL), 0, '帳載含權益法投資損失 + FVPL 評價損失；申報全剔')}
-            ${row('48', '處分資產損失', Math.max(0, -bookGainPL), Math.max(0, -declaredGainTax), '帳載 = 財報處分損益負值；申報 = 稅務面處分損益負值')}
-            ${row('53', '全年所得額（33 + 34 − 45）', f53_book, f53_decl, '帳載 = 04 − 05 − 08 + 業外收入 − 業外支出；申報 = 區 D 列 11 K 欄')}
+            ${row('35', '投資收益', f35_book, f35_decl, '股利 / 權益法 / FVPL 評價已併入 04 欄；本欄為 0')}
+            ${row('38', '利息收入', f38_book, f38_decl, '帳載：本表未追蹤；申報 = 區 D 之 H 欄收入')}
+            ${row('40', '處分資產利益', f40_book, f40_decl, '帳載 = 財報處分損益正值；申報 = 稅務面處分淨額正值（B + C + I 欄列 6）')}
+            ${row('46', '利息支出', f46_book, f46_decl, '本版未做免稅資產比例分攤')}
+            ${row('47', '投資損失', f47_book, f47_decl, '權益法損失 / FVPL 評價損失已併入 04 欄帳載（負值）；本欄為 0')}
+            ${row('48', '處分資產損失', f48_book, f48_decl, '帳載 = 財報處分損益負值；申報 = 稅務面處分淨額負值')}
+            ${row('53', '全年所得額（33 + 業外收入 − 業外支出）', f53_book, f53_decl, '申報 = 33+38+40−46−48 應等於區 D 列 11 K 欄合計')}
             ${row('99', '停徵之證券、期貨交易所得（損失）', '', col99, '＝ 區 D B11；自 53 申報數扣除')}
             ${row('101', '免徵所得稅之出售土地利益（損失）', '', col101, '＝ 區 D C11；自 53 申報數扣除')}
             ${row('58', '不計入所得額之股利金額', '', col58, '＝ 區 D D11 + F11（國內現金 + 國內股票股利）；自 53 申報數扣除')}
@@ -2061,8 +2072,9 @@ function renderTaxAllocFormGuide(ctx) {
       </div>
       <div class="small" style="margin-top:6px;line-height:1.7;">
         <strong>使用說明</strong>：左側「帳載數」對應申報書左欄（公司財報數字）；右側綠底「申報數」對應申報書右欄（自行依法調整後金額）。<br>
-        <strong>常見帳外剔除</strong>：權益法投資收益／損失（35/47 欄）、FVPL 評價損益、現金股利（轉到 58 欄）；以及處分損益財稅差（財報用財報帳面值 vs 稅務用原始成本，差額由 99/101 欄列示）。<br>
-        <strong>本版限制</strong>：38 欄利息收入、69 欄銷貨退回折讓、74 欄期末存貨等需另行處理；本表只涵蓋投資業相關 16 個欄位。
+        <strong>分類前提</strong>：投資公司本業即投資，故股利、權益法投資收益、FVPL 評價損益均歸 04 欄；處分損益歸 40/48 欄；35 / 47 欄為 0。承辦如公司會計政策不同（例如把股利放 35 欄），可手動移轉。<br>
+        <strong>常見帳外剔除</strong>：04 欄帳載含權益法投資收益、FVPL 評價損益（屬未實現），稅務全剔；現金股利則由 58 欄列示為不計入所得；處分損益財稅差（財報帳面值 vs 稅務原始成本）由 99 / 101 欄列示。<br>
+        <strong>勾稽</strong>：53 申報數 ＝ 33 申報 ＋ 38 申報 ＋ 40 申報 − 46 − 48 申報 應等於區 D 列 11 K 欄；如有 1 元誤差為四捨五入。
       </div>
     </div>
   `;
