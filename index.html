@@ -793,7 +793,7 @@ function computeEquity(co) {
   const totalRecogNI  = segments.reduce((s, x) => s + x.recogNI, 0);
   const totalRecogOCI = segments.reduce((s, x) => s + x.recogOCI, 0);
 
-  const sales = segments.filter(s => s.event && (s.event.type === '出售' || s.event.type === '股份讓與'));
+  const sales = segments.filter(s => s.event && (s.event.type === '出售' || s.event.type === '股份讓與' || s.event.type === '清算'));
   const buys  = segments.filter(s => s.event && (s.event.type === '現金增資認購' || s.event.type === '受贈' || s.event.type === '股份受讓' || s.event.type === '設立'));
   const reduces = segments.filter(s => s.event && s.event.type === '減資退現');
   const cashDivs = segments.filter(s => s.event && s.event.type === '收現金股利');
@@ -833,7 +833,7 @@ function computeEquity(co) {
   // 才能直接拿來勾稽。年中新購 / 處分 / 持股 % 變動會破壞此假設，
   // 因為取得日已存在的保留盈餘屬於原股東，不歸投資人享有。
   const acquisitionTypes = new Set(['設立', '現金增資認購', '股份受讓', '受贈']);
-  const dispositionTypes = new Set(['出售', '股份讓與', '減資退現']);
+  const dispositionTypes = new Set(['出售', '股份讓與', '清算', '減資退現']);
   const hasAcquisitionEv = segments.some(s => s.event && acquisitionTypes.has(s.event.type));
   const hasDispositionEv = segments.some(s => s.event && dispositionTypes.has(s.event.type));
   const pctChanged = Math.abs(initPct - endPct) > 0.0001;
@@ -859,6 +859,9 @@ function computeEquity(co) {
   const bvDiff = endBV - expectedEndBV;
   const bvTol = Math.max(Math.abs(expectedEndBV) * 0.01, 1000);
 
+  const totalBargainGain = sumImpact(buys, 'bargainGain');
+  const totalGoodwill    = sumImpact(buys, 'goodwill');
+
   return {
     co, totDays, niDenom, subOpStart, subOpEnd, weightedPct, segments,
     totalRecogNI, totalRecogOCI,
@@ -866,6 +869,7 @@ function computeEquity(co) {
     totalSaleProceeds, totalSaleTax, totalBVRemoved, totalCostRemoved, totalOCIRemoved,
     totalGainFin, totalGainTax,
     totalBuyAmt, totalBuyTax, totalReduceCash, totalReduceBV, totalReduceCost,
+    totalBargainGain, totalGoodwill,
     totalCashDiv, totalStockDivShares, totalStockDivAmount,
     totalCapitalRsvShares, totalCapitalRsvAmount, totalCapitalRsvParentShare,
     endShares, endBV, endCost, endOCI, endPct, initPct,
@@ -909,12 +913,51 @@ function applyEvent(ev, st, type) {
       Object.assign(impact, { saleShares: sh, proceeds, tax, ratio, bvRemoved, costRemoved, ociRemoved, gainFin, gainTax });
       break;
     }
+    case '清算': {
+      // 被投資公司本年度清算解散：投資人收到清算分配，持股全部除列
+      // 分配額直接由「金額」欄輸入總額（不需股數×單價）；股數內部自動帶入全部持股
+      const proceeds = amt; // 清算分配總額
+      const liqShares = st.shares;
+      const bvRemoved   = st.bv;
+      const costRemoved = st.cost;
+      const ociRemoved  = st.oci;
+      let gainFin;
+      const fvociRecycle = (st._fvoci_recycle === true);
+      if (type === 'FVOCI' && !fvociRecycle) {
+        gainFin = proceeds - bvRemoved;
+      } else {
+        gainFin = proceeds - bvRemoved + ociRemoved;
+      }
+      const gainTax = proceeds - costRemoved;
+      st.shares = 0; st.bv = 0; st.cost = 0; st.oci = 0;
+      Object.assign(impact, { saleShares: liqShares, proceeds, tax: 0, ratio: 1, bvRemoved, costRemoved, ociRemoved, gainFin, gainTax, isLiquidation: true });
+      break;
+    }
     case '設立':
     case '現金增資認購':
     case '股份受讓': {
-      const amount = sh * price;
-      st.shares += sh; st.bv += amount - tax; st.cost += amount;
-      Object.assign(impact, { buyShares: sh, amount, tax });
+      // 入股事件可選填「取得時對應股權淨值」於金額欄（amount）
+      // 用以辨認商譽 (cost > NV) 或廉價購買利益 (cost < NV)
+      const cashCost = sh * price;     // 實際投資成本（現金支付）
+      const acquiredNV = amt;          // 取得時對應股權淨值（可選；0 視為未啟用）
+      let bargainGain = 0;
+      let goodwill = 0;
+      let bvAdd;
+      if (acquiredNV > 0) {
+        if (acquiredNV > cashCost) {
+          // 廉價購買利益：BV 按淨值入帳；稅務成本仍為現金支付
+          bargainGain = acquiredNV - cashCost;
+          bvAdd = acquiredNV - tax;
+        } else {
+          // 商譽（含在 BV / cost 內，財稅一致）
+          goodwill = cashCost - acquiredNV;
+          bvAdd = cashCost - tax;
+        }
+      } else {
+        bvAdd = cashCost - tax;
+      }
+      st.shares += sh; st.bv += bvAdd; st.cost += cashCost;
+      Object.assign(impact, { buyShares: sh, amount: cashCost, tax, acquiredNV, bargainGain, goodwill });
       break;
     }
     case '受贈': {
@@ -1036,7 +1079,7 @@ function computeFairValue(co) {
   }
 
   // 事件聚合
-  const sales = eventImpacts.filter(x => x.event.type === '出售' || x.event.type === '股份讓與');
+  const sales = eventImpacts.filter(x => x.event.type === '出售' || x.event.type === '股份讓與' || x.event.type === '清算');
   const buys  = eventImpacts.filter(x => ['設立', '現金增資認購', '股份受讓', '受贈'].includes(x.event.type));
   const reduces = eventImpacts.filter(x => x.event.type === '減資退現');
   const cashDivs = eventImpacts.filter(x => x.event.type === '收現金股利');
@@ -1081,6 +1124,8 @@ function computeFairValue(co) {
     totalSaleProceeds, totalSaleTax, totalBVRemoved, totalCostRemoved, totalOCIRemoved,
     totalGainFin, totalGainTax,
     totalBuyAmt, totalReduceCash, totalReduceBV, totalReduceCost,
+    totalBargainGain: sumImpact(buys, 'bargainGain'),
+    totalGoodwill:    sumImpact(buys, 'goodwill'),
     totalCashDiv, totalStockDivShares, totalStockDivAmount,
     totalCapitalRsvShares, totalCapitalRsvAmount,
     bvBeforeReval, fvEnd, valGain, valGainPL, valGainOCI,
@@ -1121,7 +1166,7 @@ function computeCost(co) {
     cur.cost = Math.max(0, cur.cost - impairment);
   }
 
-  const sales = eventImpacts.filter(x => x.event.type === '出售' || x.event.type === '股份讓與');
+  const sales = eventImpacts.filter(x => x.event.type === '出售' || x.event.type === '股份讓與' || x.event.type === '清算');
   const buys  = eventImpacts.filter(x => ['設立', '現金增資認購', '股份受讓', '受贈'].includes(x.event.type));
   const reduces = eventImpacts.filter(x => x.event.type === '減資退現');
   const cashDivs = eventImpacts.filter(x => x.event.type === '收現金股利');
@@ -1163,6 +1208,8 @@ function computeCost(co) {
     totalSaleProceeds, totalSaleTax, totalBVRemoved, totalCostRemoved, totalOCIRemoved: 0,
     totalGainFin, totalGainTax,
     totalBuyAmt, totalReduceCash, totalReduceBV, totalReduceCost,
+    totalBargainGain: sumImpact(buys, 'bargainGain'),
+    totalGoodwill:    sumImpact(buys, 'goodwill'),
     totalCashDiv, totalStockDivShares, totalStockDivAmount,
     totalCapitalRsvShares, totalCapitalRsvAmount,
     impairment,
@@ -2398,7 +2445,7 @@ function renderEventTable(co) {
   const fm = formMeta(co.company_form);
   const isLimited = (co.company_form === 'LIMITED');
   // 有限公司無「流通在外股數變動」概念（無庫藏股）
-  const allTypes = ['設立', '出售', '現金增資認購', '股份受讓', '股份讓與', '受贈', '減資退現', '收現金股利', '盈餘轉增資', '資本公積轉增資', '流通在外股數變動', '資本公積變動'];
+  const allTypes = ['設立', '出售', '清算', '現金增資認購', '股份受讓', '股份讓與', '受贈', '減資退現', '收現金股利', '盈餘轉增資', '資本公積轉增資', '流通在外股數變動', '資本公積變動'];
   const types = isLimited ? allTypes.filter(t => t !== '流通在外股數變動') : allTypes;
   const sharesColLabel = isLimited ? '出資額（元）' : '股數 / 配股股數';
   const priceColLabel = isLimited ? '單價（一般填 1）' : '每股價/面額';
@@ -2421,7 +2468,13 @@ function renderEventTable(co) {
       <td>${numInput(ev.shares || 0, `data-ev="${idx}" data-key="shares"`)}</td>
       <td>${numInput(ev.price || 0, `data-ev="${idx}" data-key="price"`)}</td>
       <td>${numInput(ev.tax || 0, `data-ev="${idx}" data-key="tax"`)}</td>
-      <td class="num ev-amt">${(ev.type === '收現金股利' || ev.type === '資本公積變動') ? numInput(ev.amount || 0, `data-ev="${idx}" data-key="amount"`) : fmt(subtotal)}</td>
+      <td class="num ev-amt">${
+        (ev.type === '收現金股利' || ev.type === '資本公積變動' || ev.type === '清算')
+          ? numInput(ev.amount || 0, `data-ev="${idx}" data-key="amount"`)
+          : (ev.type === '設立' || ev.type === '現金增資認購' || ev.type === '股份受讓')
+            ? `<div>${fmt(subtotal)}</div><div style="margin-top:2px">${numInput(ev.amount || 0, `data-ev="${idx}" data-key="amount" placeholder="取得時股權淨值（選填）" title="入股時對應之被投資公司股東權益份額；填入後系統會自動辨識商譽 / 廉價購買利益"`)}</div>`
+            : fmt(subtotal)
+      }</td>
       <td><input type="text" data-ev="${idx}" data-key="note" value="${ev.note || ''}" style="text-align:left"></td>
       <td style="text-align:center"><button class="del" data-evdel="${idx}">×</button></td>
     </tr>`;
@@ -2434,10 +2487,11 @@ function renderEventTable(co) {
       <strong>日期欄位</strong>：可自由輸入任何常見格式（民國 <code>113.07.01</code> / <code>113-7-1</code> / <code>113/7/1</code> / <code>113年7月1日</code> 或西元 <code>2024/7/1</code>）；離開欄位後系統會自動轉成標準格式 <code>113.07.01</code>。無法解析會紅框警示，該事件不納入計算。
     </div>
     <details style="margin:6px 0;">
-      <summary style="cursor:pointer;font-size:13px;color:var(--c-primary);padding:4px 0;font-weight:600;">▸ 12 種事件類型說明（點擊展開）</summary>
+      <summary style="cursor:pointer;font-size:13px;color:var(--c-primary);padding:4px 0;font-weight:600;">▸ 13 種事件類型說明（點擊展開）</summary>
       <div class="note" style="margin-top:4px;">
         <strong>設立</strong>：被投資公司於本年度新成立、本公司於設立時投入出資。股數＝認購股數（有限公司填出資額）；單價＝每股認購價（有限公司填 1）；該事件日期自動視為「子公司運作起始日」，設立前的 NI/OCI 不分攤入本公司認列損益<br>
         <strong>出售</strong>：股數＝出售股數（正數）；單價＝每股賣價；證交稅／手續費另計<br>
+        <strong>清算</strong>：被投資公司於本年度解散清算。直接於「金額」欄填入收到的<u>清算分配總額</u>（股數／單價／稅費皆留 0，系統自動將全部持股除列）；處分損益（清算分配 − BV）按一般出售認列至損益<br>
         <strong>股份受讓</strong>：股數＝受讓股數；單價＝每股成交價（向被投資公司其他股東或外部投資人購入；過戶費／印花稅可填稅費欄）<br>
         <strong>股份讓與</strong>：股數＝轉讓股數；單價＝每股成交價（轉讓予被投資公司其他股東或外部投資人；證交稅依規定填入稅費欄）<br>
         <strong>現金增資認購</strong>：股數＝認購股數；單價＝認購價；手續費（如有）填稅費欄<br>
@@ -2448,6 +2502,11 @@ function renderEventTable(co) {
         <strong>資本公積轉增資</strong>：股數＝獲配股數；單價填面額 10；<u>不</u>視為股利收入（不列 58 欄）；原始成本基本上不變（每股成本被稀釋）<br>
         <strong>流通在外股數變動</strong>：被投資公司「流通在外股數」變動（如<u>買回庫藏股</u>、註銷庫藏股、再發行）；股數欄填變動量（買回填負數、再發行填正數）；本公司持股不變但持股% 會因分母改變而變動<br>
         <strong>資本公積變動</strong>：被投資公司資本公積增減（如股票溢價發行、資本公積轉增資使其減少等）；金額欄填變動量（增加填正、減少填負）；EQUITY 類型自動產生長投帳面值調整分錄
+        <div style="margin-top:8px;padding:6px 8px;background:#fef3c7;border-radius:4px;border-left:3px solid #f59e0b;">
+          <strong>商譽 / 廉價購買利益</strong>（針對 <code>設立</code> / <code>現金增資認購</code> / <code>股份受讓</code>）：金額欄第二格可<u>選填</u>「取得時對應股權淨值」（＝入股時被投資公司股東權益 × 取得持股比例，簡化以股權淨值代替可辨認淨資產公平價值）。
+          <br>● 投資成本 &gt; 取得時股權淨值 → 差額為<strong>商譽</strong>，含於長投 BV 內、財稅一致、不需帳外調整（IFRS 不攤銷；可單獨做減損測試）。
+          <br>● 投資成本 &lt; 取得時股權淨值 → 差額為<strong>廉價購買利益</strong>，財報認列為當期損益；依財政部 108.04.18 台財稅字第 <strong>10804553240</strong> 號令，屬未實現利益於申報當年度應<u>帳外調整減列</u>（系統自動於 E 表新增該調整項）。
+        </div>
       </div>
     </details>
     <table class="events">
@@ -2474,7 +2533,7 @@ function renderSegments(r) {
     let pillCls = 'y';
     if (s.event) {
       const t = s.event.type;
-      if (t === '出售' || t === '股份讓與') pillCls = 'r';
+      if (t === '出售' || t === '股份讓與' || t === '清算') pillCls = 'r';
       else if (t === '現金增資認購' || t === '股份受讓' || t === '受贈' || t === '設立') pillCls = 'b';
       else if (t === '收現金股利') pillCls = 'g';
     }
@@ -2758,20 +2817,58 @@ function renderJournalEntries(r) {
         }
         break;
       }
+      case '清算': {
+        const r1 = [
+          ['Dr.', '銀行存款（清算分配額）', im.proceeds, ''],
+          ['Cr.', investAcct + '（全額除列）', '', im.bvRemoved],
+        ];
+        const dispGain = im.proceeds - im.bvRemoved;
+        if (dispGain >= 0) r1.push(['Cr.', '處分投資利益 — 採權益法之投資（清算）', '', dispGain]);
+        else r1.splice(1, 0, ['Dr.', '處分投資損失 — 採權益法之投資（清算）', Math.abs(dispGain), '']);
+        entries.push({ head: `③ 被投資公司清算（${dateStr}）全數除列 ${fmt(im.saleShares)} 股，分配額 ${fmt(im.proceeds)}`, rows: r1 });
+        if (im.ociRemoved !== 0) {
+          if (im.ociRemoved > 0) {
+            entries.push({ head: `　　└─ OCI 重分類至損益（清算全額轉列）`, rows: [
+              ['Dr.', '其他綜合損益 — 採權益法之投資公司未實現評價損益', im.ociRemoved, ''],
+              ['Cr.', '處分投資利益 — 採權益法之投資（OCI 重分類）', '', im.ociRemoved],
+            ]});
+          } else {
+            entries.push({ head: `　　└─ OCI 重分類至損益（清算全額轉列）`, rows: [
+              ['Dr.', '處分投資損失 — 採權益法之投資（OCI 重分類）', Math.abs(im.ociRemoved), ''],
+              ['Cr.', '其他綜合損益 — 採權益法之投資公司未實現評價損益', '', Math.abs(im.ociRemoved)],
+            ]});
+          }
+        }
+        break;
+      }
       case '設立': {
-        entries.push({ head: `③ 設立認股（${dateStr}）認購 ${fmt(im.buyShares)} 股 @ ${fmt(ev.price)} 元（被投資公司本日成立，本公司於設立時投入出資）`, rows: [
+        const bgEntry = (im.bargainGain > 0) ? [
+          ['Dr.', investAcct, im.acquiredNV, ''],
+          ['Cr.', '銀行存款', '', im.amount + (im.tax || 0)],
+          ['Cr.', '廉價購買利益（屬未實現利益，稅務帳外剔除）', '', im.bargainGain],
+          ...(im.tax ? [['Dr.', '規費 / 設立費用（如有）', im.tax, '']] : []),
+        ] : [
           ['Dr.', investAcct, im.amount, ''],
           ['Cr.', '銀行存款', '', im.amount + (im.tax || 0)],
           ...(im.tax ? [['Dr.', '規費 / 設立費用（如有）', im.tax, '']] : []),
-        ]});
+          ...(im.goodwill > 0 ? [['', `（含商譽 ${fmt(im.goodwill)}：投資成本 > 取得時股權淨值 ${fmt(im.acquiredNV)}）`, '', '']] : []),
+        ];
+        entries.push({ head: `③ 設立認股（${dateStr}）認購 ${fmt(im.buyShares)} 股 @ ${fmt(ev.price)} 元（被投資公司本日成立，本公司於設立時投入出資）`, rows: bgEntry });
         break;
       }
       case '現金增資認購': {
-        entries.push({ head: `③ 現金增資認購（${dateStr}）${fmt(im.buyShares)} 股 @ ${fmt(ev.price)} 元`, rows: [
+        const bgEntry = (im.bargainGain > 0) ? [
+          ['Dr.', investAcct, im.acquiredNV, ''],
+          ['Cr.', '銀行存款', '', im.amount + (im.tax || 0)],
+          ['Cr.', '廉價購買利益（屬未實現利益，稅務帳外剔除）', '', im.bargainGain],
+          ...(im.tax ? [['Dr.', '手續費（如有）', im.tax, '']] : []),
+        ] : [
           ['Dr.', investAcct, im.amount, ''],
           ['Cr.', '銀行存款', '', im.amount + (im.tax || 0)],
           ...(im.tax ? [['Dr.', '手續費（如有）', im.tax, '']] : []),
-        ]});
+          ...(im.goodwill > 0 ? [['', `（含商譽 ${fmt(im.goodwill)}：投資成本 > 取得時股權淨值 ${fmt(im.acquiredNV)}）`, '', '']] : []),
+        ];
+        entries.push({ head: `③ 現金增資認購（${dateStr}）${fmt(im.buyShares)} 股 @ ${fmt(ev.price)} 元`, rows: bgEntry });
         break;
       }
       case '受贈': {
@@ -2848,11 +2945,18 @@ function renderJournalEntries(r) {
         break;
       }
       case '股份受讓': {
-        entries.push({ head: `③ 股份受讓（${dateStr}）${fmt(im.buyShares)} 股 @ ${fmt(ev.price)} 元（向其他股東或外部投資人購入）`, rows: [
+        const bgEntry = (im.bargainGain > 0) ? [
+          ['Dr.', investAcct, im.acquiredNV, ''],
+          ['Cr.', '銀行存款（支付予出讓方）', '', im.amount + (im.tax || 0)],
+          ['Cr.', '廉價購買利益（屬未實現利益，稅務帳外剔除）', '', im.bargainGain],
+          ...(im.tax ? [['Dr.', '證交稅 / 印花稅 / 過戶費（如有）', im.tax, '']] : []),
+        ] : [
           ['Dr.', investAcct, im.amount, ''],
           ['Cr.', '銀行存款（支付予出讓方）', '', im.amount + (im.tax || 0)],
           ...(im.tax ? [['Dr.', '證交稅 / 印花稅 / 過戶費（如有）', im.tax, '']] : []),
-        ]});
+          ...(im.goodwill > 0 ? [['', `（含商譽 ${fmt(im.goodwill)}：投資成本 > 取得時股權淨值 ${fmt(im.acquiredNV)}）`, '', '']] : []),
+        ];
+        entries.push({ head: `③ 股份受讓（${dateStr}）${fmt(im.buyShares)} 股 @ ${fmt(ev.price)} 元（向其他股東或外部投資人購入）`, rows: bgEntry });
         break;
       }
       case '股份讓與': {
@@ -2934,6 +3038,9 @@ function renderTaxOutput(r) {
   }
   if (r.sales.length > 0) {
     rows.push(`<tr><td>處分長投損益（財稅差）</td><td>財報 ${fmtSigned(r.totalGainFin)} 改為稅務 ${fmtSigned(r.totalGainTax)}（再由 99 欄列為免稅）</td><td class="num">${fmtSigned(adjDispDiff)}</td></tr>`);
+  }
+  if (r.totalBargainGain > 0) {
+    rows.push(`<tr><td>廉價購買利益（帳外剔除）</td><td>財報認列 ${fmt(r.totalBargainGain)}（取得時對應股權淨值 > 投資成本），依財政部 108.04.18 台財稅字第 10804553240 號令屬未實現利益 → 帳外調整減列</td><td class="num">${fmtSigned(-r.totalBargainGain)}</td></tr>`);
   }
   if (r.totalStockDivAmount > 0) {
     rows.push(`<tr><td>盈轉配股（稅務認列）</td><td>財報不入帳；稅務按面額認列為股利收入後列 58 欄</td><td class="num">${fmtSigned(r.totalStockDivAmount)}</td></tr>`);
@@ -3088,7 +3195,7 @@ function renderChecks(r) {
     const ev = x.event || (x && x.event);
     const im = x.evImpact || x.impact || {};
     if (!ev) return s;
-    if (ev.type === '出售' || ev.type === '股份讓與') return s - (im.saleShares || 0);
+    if (ev.type === '出售' || ev.type === '股份讓與' || ev.type === '清算') return s - (im.saleShares || 0);
     if (ev.type === '減資退現') return s - (im.reduceShares || 0);
     if (ev.type === '現金增資認購' || ev.type === '受贈' || ev.type === '股份受讓' || ev.type === '設立') return s + (im.buyShares || 0);
     if (ev.type === '盈餘轉增資') return s + (im.stockShares || 0);
