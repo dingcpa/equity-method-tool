@@ -653,7 +653,7 @@ function parseNum(s) {
 }
 
 const NUMERIC_CO_KEYS = ['init_shares', 'init_total', 'init_outstanding', 'init_capital_reserve', 'init_bv', 'init_cost', 'init_oci', 'sub_ni', 'sub_oci', 'sub_eq_end', 'sub_shares_end', 'sub_outstanding_end', 'sub_capital_reserve_end', 'fair_value_end', 'impairment'];
-const NUMERIC_EV_KEYS = ['shares', 'price', 'tax', 'amount'];
+const NUMERIC_EV_KEYS = ['shares', 'price', 'tax', 'amount', 'subShareDelta'];
 
 function parseTwDate(str) {
   if (!str) return null;
@@ -728,9 +728,15 @@ function computeEquity(co) {
     if (setupEv) subStartParsed = parseTwDate(setupEv.date);
   }
   const subOpStart = (subStartParsed && subStartParsed > yearStart && subStartParsed <= yearLastDay) ? subStartParsed : yearStart;
-  const subOpEnd = yearEnd;
+  // 子公司運作結束日：若有「清算」事件，子公司於清算日解散，之後不再產生 NI/OCI，
+  // 故 NI/OCI 只攤分到清算日為止（否則清算後時間段仍會分到 NI 份額，雖持股 0% 不認列，
+  // 但會把運作期 NI 稀釋到整年 → 認列損益被低估）。
+  let subEndParsed = null;
+  const liqEv = (co.events || []).find(e => e.type === '清算' && parseTwDate(e.date));
+  if (liqEv) subEndParsed = parseTwDate(liqEv.date);
+  const subOpEnd = (subEndParsed && subEndParsed > subOpStart && subEndParsed <= yearLastDay) ? subEndParsed : yearEnd;
   const subOpDays = daysBetween(subOpStart, subOpEnd);
-  // NI / OCI 攤分天數：若子公司年中設立，用實際運作天數而非全年天數
+  // NI / OCI 攤分天數：若子公司年中設立或年中清算，用實際運作天數而非全年天數
   const niDenom = (subOpDays > 0 && subOpDays < totDays) ? subOpDays : totDays;
 
   const events = [...(co.events || [])]
@@ -751,6 +757,8 @@ function computeEquity(co) {
     capital_reserve: co.init_capital_reserve || 0,
     bv: co.init_bv, cost: co.init_cost, oci: co.init_oci,
     _face_value: formMeta(co.company_form).face_value,
+    _sub_shares_end: co.sub_shares_end || 0,
+    _sub_outstanding_end: co.sub_outstanding_end || 0,
   };
 
   const segments = [];
@@ -957,6 +965,25 @@ function applyEvent(ev, st, type) {
         bvAdd = cashCost - tax;
       }
       st.shares += sh; st.bv += bvAdd; st.cost += cashCost;
+      if (ev.type === '設立') {
+        // 設立時被投資公司股份「無中生有」：須一併建立其總發行/流通在外股數，
+        // 否則年中設立（期初總股數填 0）時，後續各段持股 % 分母為 0 → 認列損益恆為 0。
+        // 設立後總股數來源優先序：事件自填 subShareDelta > 期末總股數 > 視為本公司 100% 持有。
+        const estTotal = (parseFloat(ev.subShareDelta) || 0) || st._sub_shares_end || st.shares;
+        const estOut = (parseFloat(ev.subShareDelta) || 0) || st._sub_outstanding_end || st._sub_shares_end || st.shares;
+        // 只升不降，避免覆蓋使用者已於期初填妥之設立後總股數（舊式填法）
+        if ((st.total || 0) < estTotal) st.total = estTotal;
+        if (st.outstanding !== undefined && st.outstanding < estOut) st.outstanding = estOut;
+      } else if (ev.type === '現金增資認購') {
+        // 子公司辦理現金增資、本公司認購新股：子公司總發行/流通在外股數一併增加，
+        // 否則認購後本公司持股增加、分母不動 → 持股 % 被高估。
+        // 增加量 = 子公司本次「總共」新發行股數（subShareDelta，含其他股東認購）；
+        // 未填則保守假設本公司認購全部新股（issued = 本公司認購股數 sh）。
+        const issued = (parseFloat(ev.subShareDelta) || 0) || sh;
+        st.total = (st.total || 0) + issued;
+        if (st.outstanding !== undefined) st.outstanding += issued;
+        Object.assign(impact, { subIssued: issued });
+      }
       Object.assign(impact, { buyShares: sh, amount: cashCost, tax, acquiredNV, bargainGain, goodwill });
       break;
     }
@@ -1052,6 +1079,8 @@ function computeFairValue(co) {
     bv: co.init_bv, cost: co.init_cost, oci: co.init_oci || 0,
     _fvoci_recycle: !!co.fvoci_recycle,
     _face_value: formMeta(co.company_form).face_value,
+    _sub_shares_end: co.sub_shares_end || 0,
+    _sub_outstanding_end: co.sub_outstanding_end || 0,
   };
 
   // 一次性套用事件（無時間段加權，因為不認列子公司損益）
@@ -1151,6 +1180,8 @@ function computeCost(co) {
     capital_reserve: co.init_capital_reserve || 0,
     bv: co.init_bv, cost: co.init_cost, oci: 0,
     _face_value: formMeta(co.company_form).face_value,
+    _sub_shares_end: co.sub_shares_end || 0,
+    _sub_outstanding_end: co.sub_outstanding_end || 0,
   };
 
   const eventImpacts = [];
@@ -2465,7 +2496,11 @@ function renderEventTable(co) {
     return `<tr data-evrow="${idx}">
       <td><input type="text" data-ev="${idx}" data-key="date" value="${ev.date || ''}" placeholder="${co.year}.07.01" style="text-align:left" class="${ev.date && !parseTwDate(ev.date) ? 'date-invalid' : ''}" title="可輸入 108.07.01、108-7-1、108/7/1、108年7月1日、2019/7/1（自動偵測民國/西元）"></td>
       <td><select data-ev="${idx}" data-key="type">${types.map(t => `<option ${t===ev.type?'selected':''}>${t}</option>`).join('')}</select></td>
-      <td>${numInput(ev.shares || 0, `data-ev="${idx}" data-key="shares"`)}</td>
+      <td>${numInput(ev.shares || 0, `data-ev="${idx}" data-key="shares"`)}${
+        (ev.type === '設立' || ev.type === '現金增資認購')
+          ? `<div style="margin-top:2px">${numInput(ev.subShareDelta || 0, `data-ev="${idx}" data-key="subShareDelta" placeholder="${ev.type === '設立' ? '設立後子公司總股數（空白=用期末總股數）' : '子公司本次新發行總股數（空白=同認購數）'}" title="${ev.type === '設立' ? '被投資公司設立後之總發行股數（如本公司認購 200,000 股、持股 20%，則填 1,000,000）。空白時系統回退使用「期末總發行股數」。' : '子公司本次現金增資「總共」新發行的股數（含其他股東認購），用以正確調整持股 % 分母。若僅本公司認購可留空（預設＝本公司認購股數）。'}"`)}</div>`
+          : ''
+      }</td>
       <td>${numInput(ev.price || 0, `data-ev="${idx}" data-key="price"`)}</td>
       <td>${numInput(ev.tax || 0, `data-ev="${idx}" data-key="tax"`)}</td>
       <td class="num ev-amt">${
@@ -2489,12 +2524,12 @@ function renderEventTable(co) {
     <details style="margin:6px 0;">
       <summary style="cursor:pointer;font-size:13px;color:var(--c-primary);padding:4px 0;font-weight:600;">▸ 13 種事件類型說明（點擊展開）</summary>
       <div class="note" style="margin-top:4px;">
-        <strong>設立</strong>：被投資公司於本年度新成立、本公司於設立時投入出資。股數＝認購股數（有限公司填出資額）；單價＝每股認購價（有限公司填 1）；該事件日期自動視為「子公司運作起始日」，設立前的 NI/OCI 不分攤入本公司認列損益<br>
+        <strong>設立</strong>：被投資公司於本年度新成立、本公司於設立時投入出資。股數＝認購股數（有限公司填出資額）；單價＝每股認購價（有限公司填 1）；股數欄下方第二格＝<u>設立後子公司總發行股數</u>（用以建立持股 % 分母；留空則自動取「期末總發行股數」）；該事件日期自動視為「子公司運作起始日」，設立前的 NI/OCI 不分攤入本公司認列損益<br>
         <strong>出售</strong>：股數＝出售股數（正數）；單價＝每股賣價；證交稅／手續費另計<br>
         <strong>清算</strong>：被投資公司於本年度解散清算。直接於「金額」欄填入收到的<u>清算分配總額</u>（股數／單價／稅費皆留 0，系統自動將全部持股除列）；處分損益（清算分配 − BV）按一般出售認列至損益<br>
         <strong>股份受讓</strong>：股數＝受讓股數；單價＝每股成交價（向被投資公司其他股東或外部投資人購入；過戶費／印花稅可填稅費欄）<br>
         <strong>股份讓與</strong>：股數＝轉讓股數；單價＝每股成交價（轉讓予被投資公司其他股東或外部投資人；證交稅依規定填入稅費欄）<br>
-        <strong>現金增資認購</strong>：股數＝認購股數；單價＝認購價；手續費（如有）填稅費欄<br>
+        <strong>現金增資認購</strong>：股數＝本公司認購股數；單價＝認購價；手續費（如有）填稅費欄；股數欄下方第二格＝<u>子公司本次現增「總共」新發行股數</u>（含其他股東認購，用以正確調整持股 % 分母；僅本公司認購可留空，預設＝本公司認購股數）<br>
         <strong>受贈</strong>：股數＝受贈股數；單價＝時價（會計與稅務認列基礎）<br>
         <strong>減資退現</strong>：股數＝減資股數；單價＝每股退回現金<br>
         <strong>收現金股利</strong>：直接於「金額」欄填入總現金股利金額；股數／單價可留 0<br>
