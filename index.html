@@ -762,6 +762,10 @@ function computeEquity(co) {
   };
 
   const segments = [];
+  // 累計餘額法消除分段四捨五入尾差：每段認列 = round(累計精確值) − 前面已認列整數和，
+  // 使各段認列加總 = round(全年精確認列) = round(子公司 NI × 全年加權持股 %)，全年零尾差，
+  // 殘差自然落在最後一段；且因在迴圈內結算，期末帳面值/OCI 累加同步一致。
+  let exactNICum = 0, roundedNICum = 0, exactOCICum = 0, roundedOCICum = 0;
   for (let i = 0; i < cutDates.length - 1; i++) {
     const segStart = cutDates[i];
     const segEnd = cutDates[i + 1];
@@ -776,8 +780,12 @@ function computeEquity(co) {
     const overlapDays = Math.max(0, daysBetween(segOpStart, segOpEnd));
     const segNIPortion  = co.sub_ni  * overlapDays / niDenom;
     const segOCIPortion = co.sub_oci * overlapDays / niDenom;
-    const recogNI  = Math.round(segNIPortion  * holdingPct);
-    const recogOCI = Math.round(segOCIPortion * holdingPct);
+    exactNICum  += segNIPortion  * holdingPct;
+    exactOCICum += segOCIPortion * holdingPct;
+    const recogNI  = Math.round(exactNICum)  - roundedNICum;
+    const recogOCI = Math.round(exactOCICum) - roundedOCICum;
+    roundedNICum  += recogNI;
+    roundedOCICum += recogOCI;
 
     const bvStart = cur.bv, costStart = cur.cost, ociStart = cur.oci;
     cur.bv  += recogNI + recogOCI;
