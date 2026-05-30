@@ -2373,7 +2373,7 @@ function renderBasicInfo(co) {
       <div class="hint">被投資公司資本公積餘額（記錄用，影響資本公積轉增資的可分配額度）</div>
 
       <div class="label">期初${fm.L_holding_pct}</div>
-      <div class="calc">${(() => { const out = (co.init_outstanding && co.init_outstanding > 0) ? co.init_outstanding : co.init_total; return out > 0 ? fmtPct(co.init_shares / out) : '—'; })()}</div>
+      <div class="calc" id="init_holding_pct">${(() => { const out = (co.init_outstanding && co.init_outstanding > 0) ? co.init_outstanding : co.init_total; return out > 0 ? fmtPct(co.init_shares / out) : '—'; })()}</div>
       <div class="hint">＝ ${fm.L_init_shares} ÷ ${fm.L_init_outstanding}（若空則用${fm.L_init_total}）</div>
 
       <div class="label">${type === 'COST' ? '期初帳面值（成本）' : '期初投資帳面值（財）'}</div>
@@ -3270,9 +3270,11 @@ function recomputeOutputs() {
   replace('out_endcarry', renderEndCarry(r));
   replace('out_checks',   renderChecks(r));
 
-  const initPctCell = document.querySelector('#in_basic .grid .calc');
+  const initPctCell = document.getElementById('init_holding_pct');
   if (initPctCell) {
-    initPctCell.textContent = yr.init_total > 0 ? fmtPct(yr.init_shares / yr.init_total) : '—';
+    // 與畫面 render 同一套分母：優先用期初流通在外股數，空白才退回期初總發行股數
+    const out = (yr.init_outstanding && yr.init_outstanding > 0) ? yr.init_outstanding : yr.init_total;
+    initPctCell.textContent = out > 0 ? fmtPct(yr.init_shares / out) : '—';
   }
 }
 
