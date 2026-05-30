@@ -825,6 +825,15 @@ function computeEquity(co) {
   const totalGainFin      = sumImpact(sales, 'gainFin');
   const totalGainTax      = sumImpact(sales, 'gainTax');
 
+  // 清算稅務拆分：清算收回屬「出資返還」，非證券處分。分配額 − 原始成本：
+  //   正差額 → 清算股利（視同股利；國內列 58 欄不計入）；
+  //   負差額 → 投資損失（查核準則§99 清算得認列，應稅可減除）。
+  const liquidations = segments.filter(s => s.event && s.event.type === '清算');
+  const totalLiqProceeds = sumImpact(liquidations, 'proceeds');
+  const totalLiqCost     = sumImpact(liquidations, 'costRemoved');
+  const liqExcess = Math.max(0, totalLiqProceeds - totalLiqCost);
+  const liqLoss   = Math.max(0, totalLiqCost - totalLiqProceeds);
+
   const totalBuyAmt   = sumImpact(buys, 'amount');
   const totalReduceCash = sumImpact(reduces, 'cashBack');
   const totalReduceBV   = sumImpact(reduces, 'bvReduced');
@@ -884,6 +893,7 @@ function computeEquity(co) {
     sales, buys, reduces, cashDivs, stockDivs,
     totalSaleProceeds, totalSaleTax, totalBVRemoved, totalCostRemoved, totalOCIRemoved,
     totalGainFin, totalGainTax,
+    totalLiqProceeds, totalLiqCost, liqExcess, liqLoss,
     totalBuyAmt, totalBuyTax, totalReduceCash, totalReduceBV, totalReduceCost,
     totalBargainGain, totalGoodwill,
     totalCashDiv, totalStockDivShares, totalStockDivAmount,
@@ -1132,6 +1142,13 @@ function computeFairValue(co) {
   const totalGainFin      = sumImpact(sales, 'gainFin');
   const totalGainTax      = sumImpact(sales, 'gainTax');
 
+  // 清算稅務拆分（同權益法）：分配 − 成本，正差→清算股利(58欄)、負差→應稅投資損失
+  const liquidations = eventImpacts.filter(x => x.event.type === '清算');
+  const totalLiqProceeds = sumImpact(liquidations, 'proceeds');
+  const totalLiqCost     = sumImpact(liquidations, 'costRemoved');
+  const liqExcess = Math.max(0, totalLiqProceeds - totalLiqCost);
+  const liqLoss   = Math.max(0, totalLiqCost - totalLiqProceeds);
+
   const totalBuyAmt   = sumImpact(buys, 'amount');
   const totalReduceCash = sumImpact(reduces, 'cashBack');
   const totalReduceBV   = sumImpact(reduces, 'bvReduced');
@@ -1160,6 +1177,7 @@ function computeFairValue(co) {
     buys, reduces, cashDivs, stockDivs,
     totalSaleProceeds, totalSaleTax, totalBVRemoved, totalCostRemoved, totalOCIRemoved,
     totalGainFin, totalGainTax,
+    totalLiqProceeds, totalLiqCost, liqExcess, liqLoss,
     totalBuyAmt, totalReduceCash, totalReduceBV, totalReduceCost,
     totalBargainGain: sumImpact(buys, 'bargainGain'),
     totalGoodwill:    sumImpact(buys, 'goodwill'),
@@ -1219,6 +1237,12 @@ function computeCost(co) {
   const totalCostRemoved  = sumImpact(sales, 'costRemoved');
   const totalGainFin      = sumImpact(sales, 'gainFin');
   const totalGainTax      = sumImpact(sales, 'gainTax');
+  // 清算稅務拆分（同權益法）：分配 − 成本，正差→清算股利(58欄)、負差→應稅投資損失
+  const liquidations = eventImpacts.filter(x => x.event.type === '清算');
+  const totalLiqProceeds = sumImpact(liquidations, 'proceeds');
+  const totalLiqCost     = sumImpact(liquidations, 'costRemoved');
+  const liqExcess = Math.max(0, totalLiqProceeds - totalLiqCost);
+  const liqLoss   = Math.max(0, totalLiqCost - totalLiqProceeds);
   const totalBuyAmt   = sumImpact(buys, 'amount');
   const totalReduceCash = sumImpact(reduces, 'cashBack');
   const totalReduceBV   = sumImpact(reduces, 'bvReduced');
@@ -1246,6 +1270,7 @@ function computeCost(co) {
     buys, reduces, cashDivs, stockDivs,
     totalSaleProceeds, totalSaleTax, totalBVRemoved, totalCostRemoved, totalOCIRemoved: 0,
     totalGainFin, totalGainTax,
+    totalLiqProceeds, totalLiqCost, liqExcess, liqLoss,
     totalBuyAmt, totalReduceCash, totalReduceBV, totalReduceCost,
     totalBargainGain: sumImpact(buys, 'bargainGain'),
     totalGoodwill:    sumImpact(buys, 'goodwill'),
@@ -1679,12 +1704,24 @@ function bucketInvestee(inv, r) {
   for (const c of TAX_COLS) buckets[c.key] = { revenue: 0, cost: 0 };
   const isDomestic = inv.dividend_source !== 'FOREIGN';
   const disp = inv.disposal_nature || 'SECURITIES';
-  // 處分損益：依處分性質歸到 B / C / I
+  // 處分損益：依處分性質歸到 B / C / I（排除清算，清算非證券交易，另行處理）
   // 採 gross：列 4 收入 = 出售價款 + (類權益法) 認列投資收益、列 5 成本 = 成本除列 + 證交稅
   const dispCol = disp === 'LAND' ? 'C' : (disp === 'OTHER' ? 'I' : 'B');
-  if (r.totalSaleProceeds || r.totalCostRemoved || r.totalSaleTax) {
-    buckets[dispCol].revenue += r.totalSaleProceeds || 0;
-    buckets[dispCol].cost += (r.totalCostRemoved || 0) + (r.totalSaleTax || 0);
+  const dispProceeds = (r.totalSaleProceeds || 0) - (r.totalLiqProceeds || 0);
+  const dispCost     = (r.totalCostRemoved || 0) - (r.totalLiqCost || 0);
+  const dispTax      = r.totalSaleTax || 0; // 清算無證交稅
+  if (dispProceeds || dispCost || dispTax) {
+    buckets[dispCol].revenue += dispProceeds;
+    buckets[dispCol].cost += dispCost + dispTax;
+  }
+  // 清算：收回屬出資返還，非處分利益。
+  //   分配 > 成本 → 超過數為清算股利（視同股利；國內→58欄 D，國外→應稅 E）
+  //   分配 < 成本 → 差額為投資損失，應稅可減除（列 I 欄成本，使列 6 毛利為負 → 減課稅所得）
+  if (r.liqExcess) {
+    buckets[isDomestic ? 'D' : 'E'].revenue += r.liqExcess;
+  }
+  if (r.liqLoss) {
+    buckets.I.cost += r.liqLoss;
   }
   // 股利
   if (r.totalCashDiv) {
@@ -2534,7 +2571,7 @@ function renderEventTable(co) {
       <div class="note" style="margin-top:4px;">
         <strong>設立</strong>：被投資公司於本年度新成立、本公司於設立時投入出資。股數＝認購股數（有限公司填出資額）；單價＝每股認購價（有限公司填 1）；股數欄下方第二格＝<u>設立後子公司總發行股數</u>（用以建立持股 % 分母；留空則自動取「期末總發行股數」）；該事件日期自動視為「子公司運作起始日」，設立前的 NI/OCI 不分攤入本公司認列損益<br>
         <strong>出售</strong>：股數＝出售股數（正數）；單價＝每股賣價；證交稅／手續費另計<br>
-        <strong>清算</strong>：被投資公司於本年度解散清算。直接於「金額」欄填入收到的<u>清算分配總額</u>（股數／單價／稅費皆留 0，系統自動將全部持股除列）；處分損益（清算分配 − BV）按一般出售認列至損益<br>
+        <strong>清算</strong>：被投資公司於本年度解散清算。直接於「金額」欄填入收到的<u>清算分配總額</u>（股數／單價／稅費皆留 0，系統自動將全部持股除列）。<u>稅務上</u>清算收回屬「出資返還」，非證券處分：系統自動以「清算分配 − 原始成本」拆分——超過成本→<strong>清算股利</strong>（視同股利，國內列 58 欄不計入所得）；低於成本→<strong>投資損失</strong>（應稅可減除，不列 99 欄）。財務上仍認列清算損益至損益表<br>
         <strong>股份受讓</strong>：股數＝受讓股數；單價＝每股成交價（向被投資公司其他股東或外部投資人購入；過戶費／印花稅可填稅費欄）<br>
         <strong>股份讓與</strong>：股數＝轉讓股數；單價＝每股成交價（轉讓予被投資公司其他股東或外部投資人；證交稅依規定填入稅費欄）<br>
         <strong>現金增資認購</strong>：股數＝本公司認購股數；單價＝認購價；手續費（如有）填稅費欄；股數欄下方第二格＝<u>子公司本次現增「總共」新發行股數</u>（含其他股東認購，用以正確調整持股 % 分母；僅本公司認購可留空，預設＝本公司認購股數）<br>
